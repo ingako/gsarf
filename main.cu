@@ -35,7 +35,7 @@ void select_k_attributes(int *reservoir, int n, int k) {
 
 vector<string> split_attributes(string line, char delim) {
     vector<string> arr;
-    const char *start = line.c_str(); // prepare to parse the line - start is position of begin of field
+    const char *start = line.c_str();
     bool instring = false;
 
     for (const char* p = start; *p; p++) {
@@ -76,36 +76,41 @@ __device__ unsigned int get_left(unsigned int index) {
 __device__ unsigned int get_right(unsigned int index) {
     return 2 * index + 2;
 }
- 
-__global__ void tree_traversal(int *decision_tree, 
+
+__global__ void tree_traversal(int *decision_trees, 
         int *attribute_arr, 
         int *data,
         int *leaf_class,
         int *leaf_back,
-        int attribute_size) {
+        int attribute_count) {
     int pos = 0;
     int thread_pos = threadIdx.x + blockIdx.x * blockDim.x;
     int data_start_pos = data[thread_pos];
 
-    while (!is_leaf(decision_tree[pos])) {
-        for (int i = 0; i < attribute_size; i++) {
-            if (attribute_arr[i] != decision_tree[pos]) continue;
+    while (!is_leaf(decision_trees[pos])) {
+        for (int i = 0; i < attribute_count; i++) {
+            if (attribute_arr[i] != decision_trees[pos]) {
+                continue;
+            }
             pos = data[data_start_pos + i] < 0 ? get_left(pos) : get_right(pos);
         }
     }
 
-    leaf_class[thread_pos] = (decision_tree[pos] & (~(1 << 31)));
+    leaf_class[thread_pos] = (decision_trees[pos] & (~(1 << 31)));
     leaf_back[thread_pos] = pos;
 }
 
-__global__ void leaf_counters_reduction(int *leaf_counters) {
+__global__ void counter_increase(int *leaf_counters) {
     // TODO
 }
 
 int main(void) {
     const int FOREST_SIZE = 1;
-    const int INSTANCE_COUNT_PER_TREE = 1;
+    cout << "Forest size: " << FOREST_SIZE << endl;
 
+    const int INSTANCE_COUNT_PER_TREE = 1;
+    cout << "Instance count per tree: " << INSTANCE_COUNT_PER_TREE << endl;
+    
     // Use a different seed value for each run
     // srand(time(NULL));
     
@@ -154,13 +159,13 @@ int main(void) {
     }
 
     // init decision tree
-    void *allocated = malloc(TREE_NODE_COUNT * INSTANCE_COUNT_PER_TREE * sizeof(int));
+    void *allocated = malloc(TREE_NODE_COUNT * sizeof(int));
     if (allocated == NULL) {
-        cout << "host error: memory allocation for decision tree failed" << endl;
+        cout << "host error: memory allocation for decision trees failed" << endl;
         return 1;
     }
-    int *h_decision_tree = (int*) allocated;
-    int *d_decision_tree;
+    int *h_decision_trees = (int*) allocated;
+    int *d_decision_trees;
 
     allocated = malloc(LEAF_COUNT * sizeof(int));
     if (allocated == NULL) {
@@ -178,29 +183,30 @@ int main(void) {
     int *h_leaf_back = (int*) allocated; // reverse pointer to map a leaf id to an offset in the tree array
     int *d_leaf_back;
 
-    // int h_leaf_counters[(2 + INSTANCE_COUNT_PER_TREE * ATTRIBUTE_COUNT_PER_TREE) * ATTRIBUTE_COUNT_PER_TREE];
+    // int h_leaf_counters[(2 + CLASS_COUNT) * ATTRIBUTE_COUNT_PER_TREE * 2 *
+    //    LEAF_COUNT * FOREST_SIZE];
     int *d_leaf_counters;
     
-    cout << "Init: set root as leaf for each instances in a tree..." << endl;
-    for (int i = 0; i < INSTANCE_COUNT_PER_TREE; i++) {
-        h_decision_tree[i * TREE_NODE_COUNT] = 0;
-        h_decision_tree[i * TREE_NODE_COUNT] |= (1 << 31);
+    cout << "Init: set root as leaf for each tree in the forest..." << endl;
+    for (int i = 0; i < FOREST_SIZE; i++) {
+        h_decision_trees[i * TREE_NODE_COUNT] = 0;
+        h_decision_trees[i * TREE_NODE_COUNT] |= (1 << 31); // init root node
     }
 
     cout << "Allocating memory on device..." << endl;
 
     cudaError_t err;
-   
-    cout << "Allocating  " << TREE_NODE_COUNT * INSTANCE_COUNT_PER_TREE * sizeof(int) << " bytes for decision tree on device..." << endl;
-    err = cudaMalloc((void **) &d_decision_tree, TREE_NODE_COUNT * INSTANCE_COUNT_PER_TREE * sizeof(int)); // allocate global memory on the device
+
+    cout << "Allocating  " << TREE_NODE_COUNT * FOREST_SIZE * sizeof(int) << " bytes for decision trees on device..." << endl;
+    err = cudaMalloc((void **) &d_decision_trees, TREE_NODE_COUNT *
+            FOREST_SIZE * sizeof(int)); // allocate global memory on the device
     if (err) {
-        cout << "error allocating memory for decision_tree on device: " <<
-            TREE_NODE_COUNT * INSTANCE_COUNT_PER_TREE << " bytes" << endl;
+        cout << "error allocating memory for decision_trees on device: " <<
+            TREE_NODE_COUNT * FOREST_SIZE << " bytes" << endl;
         return 1;
     } else {
-        cout << "device: memory for decision tree allocated successfully: "
-            << TREE_NODE_COUNT * INSTANCE_COUNT_PER_TREE * sizeof(int) << " bytes"
-            << endl;
+        cout << "device: memory for decision tree allocated successfully" <<
+            endl;
     }
     
     cout << "Allocating " << LEAF_COUNT * sizeof(int) << " bytes for leaf_class on device..." << endl;
@@ -215,13 +221,14 @@ int main(void) {
     cout << "Allocating " << LEAF_COUNT * sizeof(int) << " bytes for leaf_back on device..." << endl;
     err = cudaMalloc((void **) &d_leaf_back, LEAF_COUNT * sizeof(int));
     if (err) {
-        cout << "error allocatin memory for leaf_back on device" << endl;
+        cout << "error allocating memory for leaf_back on device" << endl;
         return 1;
     } else {
         cout << "device: memory for leaf_back allocated successfully." << endl;
     }
-    
-    gpuErrchk(cudaMemcpy(d_decision_tree, h_decision_tree, TREE_NODE_COUNT * INSTANCE_COUNT_PER_TREE * sizeof(int), cudaMemcpyHostToDevice));
+
+    gpuErrchk(cudaMemcpy(d_decision_trees, h_decision_trees, TREE_NODE_COUNT *
+                FOREST_SIZE * sizeof(int), cudaMemcpyHostToDevice));
 
     cout << "Initialize training data arrays..." << endl;
     int tree_idx = 0;
@@ -238,7 +245,10 @@ int main(void) {
 
     int *d_cur_attribute_arr;
     vector<string> arr;
-    
+
+    int block_count;
+    int thread_count;
+
     cout << endl << "Start training..." << endl;
     while (getline(file, line)) {
         arr = split(line, ",");
@@ -255,21 +265,34 @@ int main(void) {
         if (instance_idx == INSTANCE_COUNT_PER_TREE) {
             cudaMemcpy((void *) d_data, (void *) &h_data, INSTANCE_COUNT_PER_TREE * (ATTRIBUTE_COUNT_PER_TREE + 1) * sizeof(int), cudaMemcpyHostToDevice);
             cudaMemcpy((void *) d_cur_attribute_arr, (void *) &cur_attribute_arr, ATTRIBUTE_COUNT_PER_TREE * sizeof(int), cudaMemcpyHostToDevice);
-            cout << "executing tree traversal" << endl;
-            tree_traversal<<<TREE_NODE_COUNT, INSTANCE_COUNT_PER_TREE>>>(d_decision_tree, 
-                                                        d_cur_attribute_arr,
-                                                        d_data,
-                                                        d_leaf_class,
-                                                        d_leaf_back,
-                                                        ATTRIBUTE_COUNT_PER_TREE);
+
+            block_count = FOREST_SIZE;
+            thread_count = INSTANCE_COUNT_PER_TREE;
+
+            cout << "launching tree traversal kernel" << endl;
+            tree_traversal<<<block_count, thread_count>>>(d_decision_trees,
+                    d_cur_attribute_arr,
+                    d_data,
+                    d_leaf_class,
+                    d_leaf_back,
+                    ATTRIBUTE_COUNT_PER_TREE);
 
             cout << "tree traversal completed" << endl;
             instance_idx = 0;
+
+            block_count = LEAF_COUNT;
+            thread_count = ATTRIBUTE_COUNT_PER_TREE * 2;
+
+            cout << "launching counter increase kernel" << endl;
+
+            // counter_increase<<<block_count, thread_count>>>();
+
+            cout << "counter increase completed" << endl;
         }
         break; // TODO 
     }
 
-    cudaFree(d_decision_tree);
+    cudaFree(d_decision_trees);
     cudaFree(d_leaf_class);
     cudaFree(d_leaf_back);
     cudaFree(d_data);
