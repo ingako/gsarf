@@ -104,6 +104,50 @@ __global__ void counter_increase(int *leaf_counters) {
     // TODO
 }
 
+__global__ void compute_information_gain(int *leaf_counters, 
+        int *info_gain_vals, 
+        int class_count) {
+    // each leaf_counter is mapped to one block in the 1D grid
+    // each block needs as many threads as twice number of the (binary) attributes
+    // output: a vector with the attributes information gain  values for all leaves in each of the trees
+
+    // gridDim: dim3(forest_size, leaf_count)
+    // blockDim: attributes_per_tree * 2
+    // shared memory: forest_size * leaf_count * attribute_count
+
+    int tree_id = blockIdx.x;
+    int tree_count = gridDim.x;
+    int leaf_id = blockIdx.y;
+    int leaf_count = gridDim.y;
+
+    int block_id = blockIdx.x + blockIdx.y * gridDim.x; 
+    int thread_pos = threadIdx.x + block_id * blockDim.x;
+
+    int *cur_leaf_counter_col = leaf_counters + thread_pos; // TODO
+    
+    int a_ij = cur_leaf_counter_col[0];
+    int sum = 0;
+
+    extern __shared__ float s_info_gain_vals[];
+
+    for (int i = 0; i < class_count; i++) {
+        int a_ijk = cur_leaf_counter_col[2 + i];
+        
+        float param = a_ijk / a_ij; // TODO float division by zero returns INF
+        asm("max.f32 %0, %1, %2;" : "=f"(param) : "f"(param), "f"((float) 0.0));
+        sum += -(param) * log(param);
+    }
+    
+    s_info_gain_vals[thread_pos] = -sum;
+
+    __syncthreads();
+
+    if (threadIdx.x % 2 == 0) {
+        int i_x = (threadIdx.x << 1) + block_id * blockDim.x;
+        info_gain_vals[i_x] = s_info_gain_vals[thread_pos] + s_info_gain_vals[thread_pos + 1];
+    }
+}
+
 int main(void) {
     const int FOREST_SIZE = 1;
     cout << "Forest size: " << FOREST_SIZE << endl;
@@ -266,10 +310,10 @@ int main(void) {
             cudaMemcpy((void *) d_data, (void *) &h_data, INSTANCE_COUNT_PER_TREE * (ATTRIBUTE_COUNT_PER_TREE + 1) * sizeof(int), cudaMemcpyHostToDevice);
             cudaMemcpy((void *) d_cur_attribute_arr, (void *) &cur_attribute_arr, ATTRIBUTE_COUNT_PER_TREE * sizeof(int), cudaMemcpyHostToDevice);
 
+            cout << "launching tree_traversal kernel" << endl;
+            
             block_count = FOREST_SIZE;
             thread_count = INSTANCE_COUNT_PER_TREE;
-
-            cout << "launching tree traversal kernel" << endl;
             tree_traversal<<<block_count, thread_count>>>(d_decision_trees,
                     d_cur_attribute_arr,
                     d_data,
@@ -277,18 +321,42 @@ int main(void) {
                     d_leaf_back,
                     ATTRIBUTE_COUNT_PER_TREE);
 
-            cout << "tree traversal completed" << endl;
+            cout << "tree_traversal completed" << endl;
             instance_idx = 0;
+
+            cout << "launching counter_increase kernel" << endl;
 
             block_count = LEAF_COUNT;
             thread_count = ATTRIBUTE_COUNT_PER_TREE * 2;
-
-            cout << "launching counter increase kernel" << endl;
-
             // counter_increase<<<block_count, thread_count>>>();
 
-            cout << "counter increase completed" << endl;
+            cout << "counter_increase completed" << endl;
+
+            cout << "lanuching compute_information_gain kernel" << endl;
+            
+            int *d_info_gain_vals;
+
+            cout << "Allocating info_gain_vals..." << endl;
+            err = cudaMalloc((void **) &d_info_gain_vals, FOREST_SIZE * LEAF_COUNT * sizeof(float));
+            if (err) {
+                cout << "error allocating memory for info_gain_vals" <<endl;
+                return 1;
+            } else {
+                cout << "device: memory for info_gain_vals allocated successfully." << endl;
+            }
+
+            dim3 grid(FOREST_SIZE, LEAF_COUNT);
+            thread_count = ATTRIBUTE_COUNT_PER_TREE * 2;
+            int shmem = FOREST_SIZE * LEAF_COUNT * ATTRIBUTE_COUNT_PER_TREE; 
+            compute_information_gain<<<grid, thread_count, shmem * sizeof(float)>>>(d_leaf_counters,
+                    d_info_gain_vals,
+                    CLASS_COUNT);
+
+            cout << "compute_information_gain completed" << endl;
+            
+            cudaFree(d_info_gain_vals);
         }
+
         break; // TODO 
     }
 
