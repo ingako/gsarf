@@ -113,7 +113,6 @@ __global__ void compute_information_gain(int *leaf_counters,
 
     // gridDim: dim3(forest_size, leaf_count)
     // blockDim: attributes_per_tree * 2
-    // shared memory: forest_size * leaf_count * attribute_count
 
     int tree_id = blockIdx.x;
     int tree_count = gridDim.x;
@@ -128,7 +127,6 @@ __global__ void compute_information_gain(int *leaf_counters,
     int a_ij = cur_leaf_counter_col[0];
     int sum = 0;
 
-    extern __shared__ float s_info_gain_vals[];
 
     for (int i = 0; i < class_count; i++) {
         int a_ijk = cur_leaf_counter_col[2 + i];
@@ -138,13 +136,22 @@ __global__ void compute_information_gain(int *leaf_counters,
         sum += -(param) * log(param);
     }
     
-    s_info_gain_vals[thread_pos] = -sum;
+    info_gain_vals[thread_pos] = -sum;
+
+    __syncthreads();
+    
+    int i_00 = 0, i_01 = 0, i_idx = 0;
+
+    if (threadIdx.x % 2 == 0) {
+        i_00 = info_gain_vals[thread_pos];
+        i_01 = info_gain_vals[thread_pos + 1];
+        i_idx = (threadIdx.x << 1) + block_id * blockDim.x;
+    }
 
     __syncthreads();
 
     if (threadIdx.x % 2 == 0) {
-        int i_x = (threadIdx.x << 1) + block_id * blockDim.x;
-        info_gain_vals[i_x] = s_info_gain_vals[thread_pos] + s_info_gain_vals[thread_pos + 1];
+        info_gain_vals[i_idx] = i_00 + i_01;
     }
 }
 
@@ -347,8 +354,7 @@ int main(void) {
 
             dim3 grid(FOREST_SIZE, LEAF_COUNT);
             thread_count = ATTRIBUTE_COUNT_PER_TREE * 2;
-            int shmem = FOREST_SIZE * LEAF_COUNT * ATTRIBUTE_COUNT_PER_TREE; 
-            compute_information_gain<<<grid, thread_count, shmem * sizeof(float)>>>(d_leaf_counters,
+            compute_information_gain<<<grid, thread_count>>>(d_leaf_counters,
                     d_info_gain_vals,
                     CLASS_COUNT);
 
