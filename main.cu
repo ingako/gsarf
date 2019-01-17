@@ -8,16 +8,18 @@
 #include <sstream>
 #include <cmath>
 #include <map>
+#include <thrust/sort.h>
+#include <thrust/execution_policy.h>
 
 using namespace std;
 
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 
 inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true) {
-   if (code != cudaSuccess) {
-      fprintf(stderr,"GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
-      if (abort) exit(code);
-   }
+    if (code != cudaSuccess) {
+        fprintf(stderr,"GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
+        if (abort) exit(code);
+    }
 }
 
 void select_k_attributes(int *reservoir, int n, int k) { 
@@ -83,6 +85,7 @@ __global__ void tree_traversal(int *decision_trees,
         int *leaf_class,
         int *leaf_back,
         int attribute_count) {
+    // <<<FOREST_SIZE, INSTANCE_COUNT_PER_TREE>>>
     int pos = 0;
     int thread_pos = threadIdx.x + blockIdx.x * blockDim.x;
     int data_start_pos = data[thread_pos];
@@ -123,23 +126,23 @@ __global__ void compute_information_gain(int *leaf_counters,
     int thread_pos = threadIdx.x + block_id * blockDim.x;
 
     int *cur_leaf_counter_col = leaf_counters + thread_pos; // TODO
-    
+
     int a_ij = cur_leaf_counter_col[0];
     int sum = 0;
 
 
     for (int i = 0; i < class_count; i++) {
         int a_ijk = cur_leaf_counter_col[2 + i];
-        
+
         float param = a_ijk / a_ij; // TODO float division by zero returns INF
         asm("max.f32 %0, %1, %2;" : "=f"(param) : "f"(param), "f"((float) 0.0));
         sum += -(param) * log(param);
     }
-    
+
     info_gain_vals[thread_pos] = -sum;
 
     __syncthreads();
-    
+
     int i_00 = 0, i_01 = 0, i_idx = 0;
 
     if (threadIdx.x % 2 == 0) {
@@ -155,6 +158,51 @@ __global__ void compute_information_gain(int *leaf_counters,
     }
 }
 
+// hoeffding bound
+// providing an upper bound on the probability that the sum of a sample of independent random
+// variables deviates from its expected value
+// 
+// range: range of the random variable
+// confidence: desired probability of the estimate not being within the expected value
+// weight: the number of examples collected at the node
+__device__ float compute_hoeffding_bound(float range, float confidence, float n) {
+    printf("confidence is: %g\n", confidence);
+    return sqrt(((range * range) * log(1.0 / confidence)) / (2.0 * n));
+}
+
+__global__ void node_split(float *info_gain_vals, 
+        int *attribute_arr, 
+        unsigned int *node_split_decisions, 
+        int attribute_count,
+        int r,
+        int delta,
+        int n_min) {
+    // <<<forest_size, leaf_count>>>
+    // note: different from paper by using one thread per leaf
+    // output: an array of decisions whether a leaf needs to be split
+
+    int thread_pos = threadIdx.x + blockIdx.x * blockDim.x;
+
+    thrust::sort_by_key(thrust::seq, 
+            info_gain_vals + thread_pos, 
+            info_gain_vals + thread_pos + attribute_count,
+            attribute_arr);
+
+    float first_best = info_gain_vals[thread_pos + attribute_count - 1];
+    float second_best = info_gain_vals[thread_pos + attribute_count - 2];
+
+    float hoeffding_bound = compute_hoeffding_bound(r, delta, n_min);
+
+    unsigned int decision = 0;
+    if (first_best - second_best > hoeffding_bound) {
+        // split
+        decision |= (1 << 31);
+        decision |= attribute_arr[thread_pos];
+    }
+
+    node_split_decisions[thread_pos] = decision;
+}
+
 int main(void) {
     const int FOREST_SIZE = 1;
     cout << "Forest size: " << FOREST_SIZE << endl;
@@ -162,9 +210,13 @@ int main(void) {
     const int INSTANCE_COUNT_PER_TREE = 1;
     cout << "Instance count per tree: " << INSTANCE_COUNT_PER_TREE << endl;
     
+    const float N_MIN = 200;
+    const float DELTA = pow((float) 10.0, -7);
+    const float R = 1;
+
     // Use a different seed value for each run
     // srand(time(NULL));
-    
+
     cout << "Reading class file..." << endl; 
     ifstream class_file("data/activity_labels.txt");
     string class_line;
@@ -175,7 +227,7 @@ int main(void) {
 
     vector<string> class_arr = split(class_line, " ");
     string code_str, class_str;
-    
+
     int line_count = 0;
     while (class_file >> code_str >> class_str) {
         int code_int = atoi(code_str.c_str());
@@ -237,7 +289,7 @@ int main(void) {
     // int h_leaf_counters[(2 + CLASS_COUNT) * ATTRIBUTE_COUNT_PER_TREE * 2 *
     //    LEAF_COUNT * FOREST_SIZE];
     int *d_leaf_counters;
-    
+
     cout << "Init: set root as leaf for each tree in the forest..." << endl;
     for (int i = 0; i < FOREST_SIZE; i++) {
         h_decision_trees[i * TREE_NODE_COUNT] = 0;
@@ -259,7 +311,7 @@ int main(void) {
         cout << "device: memory for decision tree allocated successfully" <<
             endl;
     }
-    
+
     cout << "Allocating " << LEAF_COUNT * sizeof(int) << " bytes for leaf_class on device..." << endl;
     err = cudaMalloc((void **) &d_leaf_class, LEAF_COUNT * sizeof(int));
     if (err) {
@@ -287,7 +339,7 @@ int main(void) {
 
     int *h_data = (int*) malloc(INSTANCE_COUNT_PER_TREE * (ATTRIBUTE_COUNT_PER_TREE + 1) * sizeof(int));
     int *d_data;
-    
+
     err = cudaMalloc((void**) &d_data, INSTANCE_COUNT_PER_TREE * (ATTRIBUTE_COUNT_PER_TREE + 1) * sizeof(int));
     if (err) {
         cout << "error allocating memory for data array on GPU" << endl;
@@ -318,7 +370,7 @@ int main(void) {
             cudaMemcpy((void *) d_cur_attribute_arr, (void *) &cur_attribute_arr, ATTRIBUTE_COUNT_PER_TREE * sizeof(int), cudaMemcpyHostToDevice);
 
             cout << "launching tree_traversal kernel" << endl;
-            
+
             block_count = FOREST_SIZE;
             thread_count = INSTANCE_COUNT_PER_TREE;
             tree_traversal<<<block_count, thread_count>>>(d_decision_trees,
@@ -340,13 +392,13 @@ int main(void) {
             cout << "counter_increase completed" << endl;
 
             cout << "lanuching compute_information_gain kernel" << endl;
-            
+
             int *d_info_gain_vals;
 
             cout << "Allocating info_gain_vals..." << endl;
             err = cudaMalloc((void **) &d_info_gain_vals, FOREST_SIZE * LEAF_COUNT * sizeof(float));
             if (err) {
-                cout << "error allocating memory for info_gain_vals" <<endl;
+                cout << "error allocating memory for info_gain_vals" << endl;
                 return 1;
             } else {
                 cout << "device: memory for info_gain_vals allocated successfully." << endl;
@@ -359,7 +411,13 @@ int main(void) {
                     CLASS_COUNT);
 
             cout << "compute_information_gain completed" << endl;
-            
+
+            cout << "launching node_split kernel..." << endl;
+
+            // node_split<<<FOREST_SIZE, LEAF_COUNT>>>(); 
+
+            cout << "node_split completed" << endl;
+
             cudaFree(d_info_gain_vals);
         }
 
@@ -371,6 +429,6 @@ int main(void) {
     cudaFree(d_leaf_back);
     cudaFree(d_data);
     cudaFree(d_cur_attribute_arr);
-    
+
     return 0;
 }
