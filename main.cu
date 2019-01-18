@@ -103,8 +103,35 @@ __global__ void tree_traversal(int *decision_trees,
     leaf_back[thread_pos] = pos;
 }
 
-__global__ void counter_increase(int *leaf_counters) {
-    // TODO
+__global__ void counter_increase(int *leaf_counters, int *leaf_classes, int attribute_count) {
+    // gridDim: dim3(FOREST_SIZE, INSTANCE_COUNT_PER_TREE)
+    // blockDim: ATTRIBUTE_COUNT_PER_TREE * 2 (for binary attributes) * CLASS_COUNT
+
+    // input: an array of leaf_counters and leaf_classes reached from tree_traversal
+
+    // Each leaf counter is represented by a block and uses one thread for each attribute i and
+    // value j.
+    // Row 0 stores the total number of times value n_ij appeared.
+    // Row 1 is a mask that keeps track of which attributes have been already used in internal nodes
+    // along the path.
+    // Row 2 and onwards stores partial counters n_ijk for each class k.
+
+    int block_id = blockIdx.x + blockIdx.y * gridDim.x;
+    int counter_start_pos = block_id * (blockDim.x + 2 * attribute_count);
+    
+    int leaf_class = leaf_classes[block_id]; 
+    int k = threadIdx.x / (attribute_count * 2); // row
+
+    if (leaf_class != k) return;
+    
+    int col = threadIdx.x % (attribute_count * 2);
+
+    int n_ij_idx = counter_start_pos + col; // first row
+    int mask_idx = counter_start_pos + attribute_count * 2 + col; // second row
+    int n_ijk_idx = counter_start_pos + attribute_count * 2 * k + threadIdx.x;
+
+    atomicAdd(&leaf_counters[n_ij_idx], leaf_counters[mask_idx]);
+    atomicAdd(&leaf_counters[n_ijk_idx], leaf_counters[mask_idx]);
 }
 
 __global__ void compute_information_gain(int *leaf_counters, 
@@ -112,6 +139,7 @@ __global__ void compute_information_gain(int *leaf_counters,
         int class_count) {
     // each leaf_counter is mapped to one block in the 1D grid
     // each block needs as many threads as twice number of the (binary) attributes
+
     // output: a vector with the attributes information gain  values for all leaves in each of the trees
 
     // gridDim: dim3(forest_size, leaf_count)
@@ -164,7 +192,7 @@ __global__ void compute_information_gain(int *leaf_counters,
 // 
 // range: range of the random variable
 // confidence: desired probability of the estimate not being within the expected value
-// weight: the number of examples collected at the node
+// n: the number of examples collected at the node
 __device__ float compute_hoeffding_bound(float range, float confidence, float n) {
     printf("confidence is: %g\n", confidence);
     return sqrt(((range * range) * log(1.0 / confidence)) / (2.0 * n));
@@ -288,7 +316,7 @@ int main(void) {
 
     // int h_leaf_counters[(2 + CLASS_COUNT) * ATTRIBUTE_COUNT_PER_TREE * 2 *
     //    LEAF_COUNT * FOREST_SIZE];
-    int *d_leaf_counters;
+    int *d_leaf_counters; // TODO cudaMemset the mask row before kernel launch
 
     cout << "Init: set root as leaf for each tree in the forest..." << endl;
     for (int i = 0; i < FOREST_SIZE; i++) {
