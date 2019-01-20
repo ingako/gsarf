@@ -246,7 +246,7 @@ int main(void) {
     // srand(time(NULL));
 
     cout << "Reading class file..." << endl; 
-    ifstream class_file("data/activity_labels.txt");
+    ifstream class_file("data/random-tree/labels.txt");
     string class_line;
 
     // init mapping between class and code
@@ -267,11 +267,13 @@ int main(void) {
     cout << "Number of class: " << CLASS_COUNT << endl;
 
     // prepare attributes
-    std::ifstream file("data/train.csv");
+    std::ifstream file("data/random-tree/synthetic_with_noise.csv");
     string line;
 
     getline(file, line);
-    const int ATTRIBUTE_COUNT_TOTAL = split_attributes(line, ',').size() - 2; 
+    // const int ATTRIBUTE_COUNT_TOTAL = split_attributes(line, ',').size() - 2; // for activity-recognition dataset
+    cout << "data: " << line << endl;
+    const int ATTRIBUTE_COUNT_TOTAL = split(line, ",").size() - 1;
     const int ATTRIBUTE_COUNT_PER_TREE = (int) sqrt(ATTRIBUTE_COUNT_TOTAL);
 
     cout << "Attribute count total: " << ATTRIBUTE_COUNT_TOTAL << endl;
@@ -336,7 +338,7 @@ int main(void) {
             TREE_NODE_COUNT * FOREST_SIZE << " bytes" << endl;
         return 1;
     } else {
-        cout << "device: memory for decision tree allocated successfully" <<
+        cout << "device: memory for decision tree allocated successfully." <<
             endl;
     }
 
