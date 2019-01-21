@@ -107,9 +107,9 @@ __global__ void tree_traversal(int *decision_trees,
     }
 
     int tree_data_start_idx = blockIdx.x * blockDim.x * (attribute_count + 1); // tree_idx * instance_count_per_tree * data_row_len
-    int data_start_idx = threadIdx.x * (attribute_count + 1) + tree_data_start_idx;
+    int instance_data_start_idx = threadIdx.x * (attribute_count + 1) + tree_data_start_idx;
 
-    int *cur_data_line = data + data_start_idx; 
+    int *cur_data_line = data + instance_data_start_idx; 
     int *cur_attribute_arr = attribute_arr + blockIdx.x * attribute_count;
 
     int pos = 0;
@@ -126,7 +126,8 @@ __global__ void tree_traversal(int *decision_trees,
     int leaf_class_code = (decision_trees[pos] & (~(1 << 31)));
     leaf_class[thread_pos] = leaf_class_code; 
     leaf_back[thread_pos] = pos;
-    // printf("class code: %i    actual_class: %i \n", leaf_class_code, cur_data_line[attribute_count]);
+    // printf("class code: %i  actual_class: %i   class_idx: %i\n", leaf_class_code,
+    //        cur_data_line[attribute_count], data_start_idx + attribute_count);
 
     // TODO test parallel reduction
     if (leaf_class_code == cur_data_line[attribute_count]) {
@@ -418,6 +419,7 @@ int main(void) {
     while (!eof) {
 
         for (int tree_idx = 0; tree_idx < TREE_COUNT; tree_idx++) {
+            
             for (int instance_idx = 0; instance_idx < INSTANCE_COUNT_PER_TREE; instance_idx++) {
                 if (!getline(file, line)) {
                     eof = true;
@@ -437,6 +439,8 @@ int main(void) {
                 }
 
                 h_data[data_start_idx + ATTRIBUTE_COUNT_PER_TREE] = class_code_map[raw_data_row[raw_data_row.size() - 1]]; // class
+                // cout << "h_data_class_idx: " << data_start_idx + ATTRIBUTE_COUNT_PER_TREE << endl;
+                // cout << "h_data class is: " << h_data[data_start_idx + ATTRIBUTE_COUNT_PER_TREE] << endl;
             }
 
             if (eof) {
@@ -444,7 +448,7 @@ int main(void) {
             }
         }
 
-        gpuErrchk(cudaMemcpy((void *) d_data, (void *) &h_data, INSTANCE_COUNT_PER_TREE *
+        gpuErrchk(cudaMemcpy((void *) d_data, (void *) h_data, INSTANCE_COUNT_PER_TREE *
                     (ATTRIBUTE_COUNT_PER_TREE + 1) * sizeof(int), cudaMemcpyHostToDevice));
 
         cout << "\nlaunching tree_traversal kernel..." << endl;
@@ -497,6 +501,8 @@ int main(void) {
         // node_split<<<TREE_COUNT, LEAF_COUNT_PER_TREE>>>(); 
 
         cout << "node_split completed" << endl;
+
+        break; // TODO
     }
 
     cudaFree(d_decision_trees);
