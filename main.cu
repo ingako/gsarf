@@ -96,6 +96,7 @@ __device__ unsigned int get_right(unsigned int index) {
 __global__ void tree_traversal(int *decision_trees, 
         int *attribute_arr, 
         int *data,
+        int *leaf_ids,
         int *leaf_class,
         int *leaf_back,
         int *correct_counter,
@@ -114,7 +115,6 @@ __global__ void tree_traversal(int *decision_trees,
 
     int pos = 0;
     while (!is_leaf(decision_trees[pos])) {
-        printf("%s", "should not be in here");
         for (int i = 0; i < attribute_count; i++) {
             if (cur_attribute_arr[i] != decision_trees[pos]) {
                 continue;
@@ -123,23 +123,28 @@ __global__ void tree_traversal(int *decision_trees,
         }
     }
 
-    int leaf_class_code = (decision_trees[pos] & (~(1 << 31)));
-    leaf_class[thread_pos] = leaf_class_code; 
+    int leaf_id = (decision_trees[pos] & (~(1 << 31)));
+    leaf_ids[thread_pos] = leaf_id; 
+    leaf_class[thread_pos] = leaf_class[leaf_id];
     leaf_back[thread_pos] = pos;
     // printf("class code: %i  actual_class: %i   class_idx: %i\n", leaf_class_code,
     //        cur_data_line[attribute_count], data_start_idx + attribute_count);
 
     // TODO test parallel reduction
-    if (leaf_class_code == cur_data_line[attribute_count]) {
+    if (leaf_class[thread_pos] == cur_data_line[attribute_count]) {
         atomicAdd(correct_counter, 1);
     }
 }
 
-__global__ void counter_increase(int *leaf_counters, int *leaf_classes, int attribute_count) {
+__global__ void counter_increase(int *leaf_counters, 
+        int *leaf_ids,
+        int *leaf_classes, 
+        int attribute_count) {
     // gridDim: dim3(TREE_COUNT, INSTANCE_COUNT_PER_TREE)
-    // blockDim: ATTRIBUTE_COUNT_PER_TREE * 2 (for binary attributes) * CLASS_COUNT
+    // blockDim: ATTRIBUTE_COUNT_PER_TREE * 2 (for binary attributes) * (CLASS_COUNT + 2)
+    // note: no need to launch extra threads for the first two rows
 
-    // input: an array of leaf_counters and leaf_classes reached from tree_traversal
+    // input: an array of leaf_ids (offset) and leaf_classes built from tree_traversal
 
     // Each leaf counter is represented by a block and uses one thread for each attribute i and
     // value j.
@@ -149,21 +154,29 @@ __global__ void counter_increase(int *leaf_counters, int *leaf_classes, int attr
     // Row 2 and onwards stores partial counters n_ijk for each class k.
 
     int block_id = blockIdx.x + blockIdx.y * gridDim.x;
-    int counter_start_pos = block_id * (blockDim.x + 2 * attribute_count);
+    int leaf_id = leaf_ids[block_id];
+
+    int row = threadIdx.x / (attribute_count * 2);
+    if (row == 1) {
+        return; // do nothing in the mask row
+    }
 
     int leaf_class = leaf_classes[block_id]; 
-    int k = threadIdx.x / (attribute_count * 2); // row
+    if (row != 0 && leaf_class != row - 2) {
+        return;
+    }
 
-    if (leaf_class != k) return;
+    // the counter start position corresponds to the leaf_id i.e. leaf offset
+    int counter_start_pos = leaf_id * blockDim.x;
 
     int col = threadIdx.x % (attribute_count * 2);
+    int mask_idx = counter_start_pos + attribute_count * 2 + col; 
 
-    int n_ij_idx = counter_start_pos + col; // first row
-    int mask_idx = counter_start_pos + attribute_count * 2 + col; // second row
-    int n_ijk_idx = counter_start_pos + attribute_count * 2 * k + threadIdx.x;
+    int *cur_leaf_counter = leaf_counters + counter_start_pos; 
+    int cur_counter_idx = threadIdx.x + counter_start_pos;
 
-    atomicAdd(&leaf_counters[n_ij_idx], leaf_counters[mask_idx]);
-    atomicAdd(&leaf_counters[n_ijk_idx], leaf_counters[mask_idx]);
+    atomicAdd(&cur_leaf_counter[cur_counter_idx], leaf_counters[mask_idx]);
+    atomicAdd(&cur_leaf_counter[cur_counter_idx], leaf_counters[mask_idx]);
 }
 
 __global__ void compute_information_gain(int *leaf_counters, 
@@ -266,10 +279,10 @@ int main(void) {
     const int TREE_COUNT = 1;
     cout << "Number of decision trees: " << TREE_COUNT << endl;
 
-    const int INSTANCE_COUNT_PER_TREE = 200;
+    const int INSTANCE_COUNT_PER_TREE = 10;
     cout << "Instance count per tree: " << INSTANCE_COUNT_PER_TREE << endl;
 
-    const float N_MIN = 200;
+    const float N_MIN = TREE_COUNT * INSTANCE_COUNT_PER_TREE; // 200
     const float DELTA = pow((float) 10.0, -7);
     const float R = 1;
 
@@ -323,6 +336,15 @@ int main(void) {
     for (int i = 0; i < TREE_COUNT; i++) {
         select_k_attributes(h_attribute_arr + i * ATTRIBUTE_COUNT_PER_TREE, ATTRIBUTE_COUNT_TOTAL, ATTRIBUTE_COUNT_PER_TREE);
     }
+    
+    cout << "\nAttributes selected per tree: " << endl;
+    for (int i = 0; i < TREE_COUNT; i++) {
+        cout << "tree " << i << endl;
+        for (int j = 0; j < ATTRIBUTE_COUNT_PER_TREE; j++) {
+            cout << h_attribute_arr[i * ATTRIBUTE_COUNT_PER_TREE + j] << " ";
+        }
+        cout << endl;
+    }
 
     // init decision tree
     cout << "\nAllocating memory on host..." << endl;
@@ -365,6 +387,11 @@ int main(void) {
         return 1;
     }
 
+    int *d_leaf_ids;
+    if (!allocate_memory_on_device(&d_leaf_ids, "leaf_ids", LEAF_COUNT_PER_TREE * TREE_COUNT)) {
+        return 1;
+    }
+
     if (!allocate_memory_on_device(&d_leaf_class, "leaf_class", LEAF_COUNT_PER_TREE * TREE_COUNT)) {
         return 1;
     }
@@ -372,6 +399,11 @@ int main(void) {
     if (!allocate_memory_on_device(&d_leaf_back, "leaf_back", LEAF_COUNT_PER_TREE * TREE_COUNT)) {
         return 1;
     }
+
+    // TODO: for testing only
+    int *h_leaf_counters = (int*) malloc(
+            TREE_COUNT * LEAF_COUNT_PER_TREE * ATTRIBUTE_COUNT_PER_TREE * 2 
+            * (CLASS_COUNT + 2) * sizeof(int));
 
     int *d_leaf_counters;
     if (!allocate_memory_on_device(&d_leaf_counters, "leaf_counters", TREE_COUNT *
@@ -418,6 +450,7 @@ int main(void) {
 
     while (!eof) {
 
+        // prepare data
         for (int tree_idx = 0; tree_idx < TREE_COUNT; tree_idx++) {
             
             for (int instance_idx = 0; instance_idx < INSTANCE_COUNT_PER_TREE; instance_idx++) {
@@ -440,7 +473,7 @@ int main(void) {
 
                 h_data[data_start_idx + ATTRIBUTE_COUNT_PER_TREE] = class_code_map[raw_data_row[raw_data_row.size() - 1]]; // class
                 // cout << "h_data_class_idx: " << data_start_idx + ATTRIBUTE_COUNT_PER_TREE << endl;
-                // cout << "h_data class is: " << h_data[data_start_idx + ATTRIBUTE_COUNT_PER_TREE] << endl;
+                // cout << "h_data class: " << h_data[data_start_idx + ATTRIBUTE_COUNT_PER_TREE] << endl;
             }
 
             if (eof) {
@@ -463,6 +496,7 @@ int main(void) {
         tree_traversal<<<block_count, thread_count>>>(d_decision_trees,
                 d_attribute_arr,
                 d_data,
+                d_leaf_ids,
                 d_leaf_class,
                 d_leaf_back,
                 d_correct_counter,
@@ -480,9 +514,39 @@ int main(void) {
 
         cout << "\nlaunching counter_increase kernel..." << endl;
 
-        block_count = LEAF_COUNT_PER_TREE;
-        thread_count = ATTRIBUTE_COUNT_PER_TREE * 2;
-        // counter_increase<<<block_count, thread_count>>>();
+        thread_count = ATTRIBUTE_COUNT_PER_TREE * 2 * (CLASS_COUNT + 2);
+
+        counter_increase
+            <<<dim3(TREE_COUNT, INSTANCE_COUNT_PER_TREE), thread_count>>>(
+                    d_leaf_counters,
+                    d_leaf_ids,
+                    d_leaf_class,
+                    ATTRIBUTE_COUNT_PER_TREE);
+
+        cudaDeviceSynchronize();
+
+        // TODO: for testing only
+        gpuErrchk(cudaMemcpy(h_leaf_counters, d_leaf_counters, 
+                    LEAF_COUNT_PER_TREE * TREE_COUNT * sizeof(int), cudaMemcpyDeviceToHost));
+
+        cout << "counter_increase result: " << endl;
+
+        int row_len = ATTRIBUTE_COUNT_PER_TREE * 2;
+        for (int t = 0; t < TREE_COUNT; t++) {
+            cout << "\ntree " << t << endl;
+
+            int counter_start_pos = t * ATTRIBUTE_COUNT_PER_TREE * 2 * (CLASS_COUNT + 2);
+            int *cur_counter = h_leaf_counters + counter_start_pos;
+
+            for (int k = 0; k < CLASS_COUNT + 2; k++) {
+                cout << "row " << k << ": ";
+                for (int ij = 0; ij < row_len; ij++) {
+                    cout << cur_counter[k * row_len + ij] << " ";
+                }
+                cout << endl;
+            }
+        }
+        cout << endl;
 
         cout << "counter_increase completed" << endl;
 
