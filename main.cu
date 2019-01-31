@@ -221,7 +221,7 @@ __global__ void compute_information_gain(int *leaf_counters,
 
     int mask = cur_leaf_counter[leaf_counter_row_len + threadIdx.x];
     int a_ij = cur_leaf_counter[threadIdx.x];
-    cur_info_gain_vals[threadIdx.x] = -FLT_MAX;
+    cur_info_gain_vals[threadIdx.x] = FLT_MAX;
 
     if (mask == 1) {
         // sum up a column
@@ -316,8 +316,8 @@ __global__ void compute_node_split_decisions(float *info_gain_vals,
             cur_info_gain_vals + attribute_count,
             cur_attribute_idx_arr);
 
-    float first_best = cur_info_gain_vals[attribute_count - 1];
-    float second_best = cur_info_gain_vals[attribute_count - 2];
+    float first_best = cur_info_gain_vals[0];
+    float second_best = cur_info_gain_vals[1];
 
     float hoeffding_bound = compute_hoeffding_bound(r, delta, samples_seen_count[thread_pos]);
 
@@ -325,7 +325,7 @@ __global__ void compute_node_split_decisions(float *info_gain_vals,
     if (fabs(first_best - second_best) > hoeffding_bound) {
         // split on the best attribute
         decision |= (1 << 31);
-        decision |= cur_attribute_idx_arr[attribute_count - 1];
+        decision |= cur_attribute_idx_arr[0];
     }
 
     node_split_decisions[thread_pos] = decision;
