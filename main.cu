@@ -101,10 +101,10 @@ __global__ void tree_traversal(int *decision_trees,
         int *leaf_class,
         int *correct_counter,
         int *samples_seen_count,
+        int node_count_per_tree,
         int leaf_count_per_tree,
         int attribute_count_total) {
     // <<<TREE_COUNT, INSTANCE_COUNT_PER_TREE>>>
-    // int thread_pos = threadIdx.x + blockIdx.x * blockDim.x;
 
     int tree_idx = blockIdx.x;
     int instance_count_per_tree = blockDim.x;
@@ -114,15 +114,18 @@ __global__ void tree_traversal(int *decision_trees,
         return;
     }
 
-    int *cur_data_line = data + threadIdx.x * (attribute_count_total + 1);
+    int instance_idx = threadIdx.x;
+
+    int *cur_data_line = data + instance_idx * (attribute_count_total + 1);
+    int *cur_decision_tree = decision_trees + tree_idx * node_count_per_tree;
 
     int pos = 0;
-    while (!IS_BIT_SET(decision_trees[pos], 31)) {
-        int attribute_id = decision_trees[pos];
+    while (!IS_BIT_SET(cur_decision_tree[pos], 31)) {
+        int attribute_id = cur_decision_tree[pos];
         pos = cur_data_line[attribute_id] == 0 ? get_left(pos) : get_right(pos);
     }
 
-    int leaf_offset = (decision_trees[pos] & (~(1 << 31)));
+    int leaf_offset = (cur_decision_tree[pos] & (~(1 << 31)));
     leaf_ids[thread_pos] = leaf_offset; 
 
     atomicAdd(&samples_seen_count[leaf_offset + tree_idx * leaf_count_per_tree], 1);
@@ -165,11 +168,15 @@ __global__ void counter_increase(int *leaf_counters,
     
     int tree_idx = blockIdx.x;
     int instance_idx = blockIdx.y;
+    int instance_count_per_tree = gridDim.y;
 
-    int leaf_id = leaf_ids[block_id];
+    int *cur_leaf_ids = leaf_ids + tree_idx * instance_count_per_tree; 
+    int leaf_id = cur_leaf_ids[instance_idx];
 
     int *cur_data = data + instance_idx * (attribute_count_total + 1);
-    int *cur_attribute_idx_arr = attribute_idx_arr + tree_idx * attribute_count_per_tree;
+
+    int cur_attribute_idx_arr_pos = tree_idx * leaf_count_per_tree * attribute_count_per_tree;
+    int *cur_attribute_idx_arr = attribute_idx_arr + cur_attribute_idx_arr_pos; // TODO: prone to error
 
     // the counter start position corresponds to the leaf_id i.e. leaf offset
     int counter_start_pos = leaf_id * leaf_counter_size + tree_idx *
@@ -180,14 +187,17 @@ __global__ void counter_increase(int *leaf_counters,
     int ij = cur_data[cur_attribute_idx_arr[threadIdx.x]] + threadIdx.x * 2; // binary value 0 or 1
     int k = cur_data[attribute_count_total]; // class
 
-    int mask = cur_leaf_counter[attribute_count_per_tree * 2 + ij];
+    // int mask = cur_leaf_counter[attribute_count_per_tree * 2 + ij];
     int n_ijk_idx = (k + 2) * attribute_count_per_tree * 2 + ij;
 
-    atomicAdd(&cur_leaf_counter[ij], mask); // row 0
-    atomicAdd(&cur_leaf_counter[n_ijk_idx], mask);
+    // atomicAdd(&cur_leaf_counter[ij], mask); // row 0
+    // atomicAdd(&cur_leaf_counter[n_ijk_idx], mask);
+    atomicAdd(&cur_leaf_counter[ij], 1); // row 0
+    atomicAdd(&cur_leaf_counter[n_ijk_idx], 1);
 }
 
 __global__ void compute_information_gain(int *leaf_counters, 
+        int *leaf_class,
         float *info_gain_vals, 
         int attribute_count_per_tree,
         int class_count,
@@ -238,8 +248,8 @@ __global__ void compute_information_gain(int *leaf_counters,
             // sum += -(param) * log(param);
 
             float param = 0.0;
-            if (a_ijk != 0 && a_ij != 0) {
-                param = (float) a_ijk / a_ij;
+            if (a_ijk != 0) { // && a_ij != 0) {
+                param = (float) a_ijk / (float) a_ij;
             }
 
             float log_param = 0.0;
@@ -248,15 +258,15 @@ __global__ void compute_information_gain(int *leaf_counters,
             }
 
             sum += -(param) * log_param;
+
         }
 
         cur_info_gain_vals[threadIdx.x] = -sum;
     }
 
-
     __syncthreads();
 
-    float i_00 = 0, i_01 = 0;
+    float i_00 = 0.0, i_01 = 0.0;
     int i_idx = 0;
 
     if (threadIdx.x % 2 == 0) {
@@ -270,6 +280,27 @@ __global__ void compute_information_gain(int *leaf_counters,
     if (threadIdx.x % 2 == 0) {
         cur_info_gain_vals[i_idx] = i_00 + i_01;
     }
+
+    if (threadIdx.x != 0) {
+        return;
+    }
+    
+    int majority_class_code = 0;
+    int majority_class_count = 0;
+
+    for (int k = 0; k < class_count; k++) {
+        int a_k = cur_leaf_counter[threadIdx.x + (2 + k) * leaf_counter_row_len]
+                + cur_leaf_counter[threadIdx.x + 1 + (2 + k) * leaf_counter_row_len];
+
+        if (a_k > majority_class_count) {
+            majority_class_count = a_k;
+            majority_class_code = k;
+        }
+    }
+
+    int *cur_leaf_class = leaf_class + tree_id * leaf_count_per_tree;
+    cur_leaf_class[leaf_id] = majority_class_code;
+
 }
 
 // hoeffding bound
@@ -280,7 +311,9 @@ __global__ void compute_information_gain(int *leaf_counters,
 // confidence: desired probability of the estimate not being within the expected value
 // n: the number of examples collected at the node
 __device__ float compute_hoeffding_bound(float range, float confidence, float n) {
-    return sqrt(((range * range) * log(1.0 / confidence)) / (2.0 * n));
+    float result = sqrt(((range * range) * log(1.0 / confidence)) / (2.0 * n));
+    printf("=========> range: %f, confidence: %f, n: %f, result: %f\n", range, confidence, n, result);
+    return result;
 }
 
 __global__ void compute_node_split_decisions(float *info_gain_vals, 
@@ -371,6 +404,8 @@ __global__ void node_split(int *decision_trees,
 
     for (int leaf_idx = 0; leaf_idx < max_leaf_count_per_tree; leaf_idx++) {
         unsigned int decision = cur_node_split_decisions[leaf_idx];
+        cur_node_split_decisions[leaf_idx] = 0;
+
         int *cur_leaf_counter = cur_tree_leaf_counters + leaf_idx * counter_size_per_leaf;
 
         if (cur_node_count == max_node_count_per_tree) {
@@ -448,14 +483,14 @@ __global__ void node_split(int *decision_trees,
 }
 
 int main(void) {
-    const int TREE_COUNT = 1;
+    const int TREE_COUNT = 60;
     cout << "Number of decision trees: " << TREE_COUNT << endl;
 
     const int INSTANCE_COUNT_PER_TREE = 1000;
     cout << "Instance count per tree: " << INSTANCE_COUNT_PER_TREE << endl;
 
     // hoeffding bound parameters
-    float n_min = TREE_COUNT * INSTANCE_COUNT_PER_TREE;
+    float n_min = 1000;
     float delta = 0.05; // pow((float) 10.0, -7);
     float r = 1;
     cout << "hoeffding bound parameters: " << endl
@@ -465,6 +500,9 @@ int main(void) {
 
     // Use a different seed value for each run
     // srand(time(NULL));
+    
+    ofstream output_file;
+    output_file.open("result_gpu.txt");
 
     cout << "Reading class file..." << endl; 
     ifstream class_file("data/random-tree/labels.txt");
@@ -499,7 +537,7 @@ int main(void) {
     cout << "Attribute count total: " << ATTRIBUTE_COUNT_TOTAL << endl;
     cout << "Attribute count per tree: " << ATTRIBUTE_COUNT_PER_TREE << endl;
 
-    const unsigned int NODE_COUNT_PER_TREE = (1 << (ATTRIBUTE_COUNT_PER_TREE + 1));
+    const unsigned int NODE_COUNT_PER_TREE = (1 << (ATTRIBUTE_COUNT_PER_TREE + 1)) - 1;
     const unsigned int LEAF_COUNT_PER_TREE = (1 << ATTRIBUTE_COUNT_PER_TREE);
 
     cout << "NODE_COUNT_PER_TREE: " << NODE_COUNT_PER_TREE << endl;
@@ -552,7 +590,12 @@ int main(void) {
 
     cout << "Init: set root as leaf for each tree in the forest..." << endl;
     for (int i = 0; i < TREE_COUNT; i++) {
-        h_decision_trees[i * NODE_COUNT_PER_TREE] = (1 << 31); // init root node
+        int *cur_decision_tree = h_decision_trees + i * NODE_COUNT_PER_TREE; 
+        cur_decision_tree[0] = (1 << 31);
+        // h_decision_trees[i * NODE_COUNT_PER_TREE] = (1 << 31); // init root node
+        for (int j = 1; j < NODE_COUNT_PER_TREE; j++) {
+            cur_decision_tree[j] = -1;
+        }
     }
 
     cout << "\nAllocating memory on device..." << endl;
@@ -712,7 +755,7 @@ int main(void) {
     int iter_count = 0;
     while (!eof) {
 
-        cout << endl << "=================iteration " << iter_count++ 
+        cout << endl << "=================iteration " << iter_count
             << "=================" << endl;
         cout << "preparing data..." << endl;
 
@@ -757,6 +800,7 @@ int main(void) {
                 d_leaf_class,
                 d_correct_counter,
                 d_samples_seen_count,
+                NODE_COUNT_PER_TREE,
                 LEAF_COUNT_PER_TREE,
                 ATTRIBUTE_COUNT_TOTAL);
 
@@ -797,7 +841,10 @@ int main(void) {
         gpuErrchk(cudaMemcpy(&h_correct_counter, d_correct_counter, sizeof(int), cudaMemcpyDeviceToHost));
         cout << "h_correct_counter: " << h_correct_counter << endl;
         double accuracy = (double) h_correct_counter / (INSTANCE_COUNT_PER_TREE * TREE_COUNT);
-        cout << "=============== accuracy: " << accuracy << endl;
+        cout << "===============> " << " accuracy: " << accuracy << endl;
+
+        output_file << iter_count * INSTANCE_COUNT_PER_TREE * TREE_COUNT
+            << " accuracy: " << accuracy << endl;
 
         cout << "\nlaunching counter_increase kernel..." << endl;
         
@@ -853,6 +900,7 @@ int main(void) {
         thread_count = ATTRIBUTE_COUNT_PER_TREE * 2;
 
         compute_information_gain<<<grid, thread_count>>>(d_leaf_counters,
+                d_leaf_class,
                 d_info_gain_vals,
                 ATTRIBUTE_COUNT_PER_TREE,
                 CLASS_COUNT,
@@ -914,6 +962,8 @@ int main(void) {
 
         cout << "node_split completed" << endl;
 
+        iter_count++;
+        // if (iter_count == 797) break;
         // break; // TODO
     }
 
@@ -925,6 +975,8 @@ int main(void) {
     cudaFree(d_data);
     cudaFree(d_info_gain_vals);
     cudaFree(d_node_split_decisions);
+
+    output_file.close();
 
     return 0;
 }
