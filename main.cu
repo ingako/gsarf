@@ -141,7 +141,7 @@ __global__ void tree_traversal(int *decision_trees,
 __global__ void counter_increase(int *leaf_counters, 
         int *reached_leaf_ids,
         int *data,
-        int *attribute_idx_arr,
+        int *attribute_val_arr,
         int class_count,
         int attribute_count_per_tree,
         int attribute_count_total,
@@ -177,8 +177,7 @@ __global__ void counter_increase(int *leaf_counters,
 
     int *cur_data = data + instance_idx * (attribute_count_total + 1);
 
-    int cur_attribute_idx_arr_pos = tree_idx * leaf_count_per_tree * attribute_count_per_tree;
-    int *cur_attribute_idx_arr = attribute_idx_arr + cur_attribute_idx_arr_pos; // TODO: prone to error
+    int *cur_attribute_val_arr = attribute_val_arr + tree_idx * attribute_count_per_tree;
 
     // the counter start position corresponds to the leaf_id i.e. leaf offset
     int counter_start_pos = reached_leaf_id * leaf_counter_size + tree_idx *
@@ -186,7 +185,7 @@ __global__ void counter_increase(int *leaf_counters,
     int *cur_leaf_counter = leaf_counters + counter_start_pos;
     // printf("leaf counter start pos is:  %i\n", counter_start_pos);
 
-    int ij = cur_data[cur_attribute_idx_arr[threadIdx.x]] + threadIdx.x * 2; // binary value 0 or 1
+    int ij = cur_data[cur_attribute_val_arr[threadIdx.x]] + threadIdx.x * 2; // binary value 0 or 1
     int k = cur_data[attribute_count_total]; // class
 
     // int mask = cur_leaf_counter[attribute_count_per_tree * 2 + ij];
@@ -260,7 +259,6 @@ __global__ void compute_information_gain(int *leaf_counters,
             }
 
             sum += -(param) * log_param;
-
         }
 
         cur_info_gain_vals[threadIdx.x] = -sum;
@@ -340,6 +338,7 @@ __global__ void compute_node_split_decisions(float *info_gain_vals,
     int leaf_idx = threadIdx.x;
     int leaf_count_per_tree = blockDim.x;
 
+
     int cur_tree_attr_idx_start_pos = tree_idx * leaf_count_per_tree * attribute_count;
     int cur_leaf_attr_idx_start_pos = cur_tree_attr_idx_start_pos + leaf_idx * attribute_count;
     int *cur_attribute_idx_arr = attribute_idx_arr + cur_leaf_attr_idx_start_pos;
@@ -374,6 +373,7 @@ __global__ void node_split(int *decision_trees,
         int *leaf_counters,
         int *leaf_class,
         int *leaf_back,
+        int *attribute_val_arr,
         int *samples_seen_count,
         int *cur_node_count_per_tree,
         int *cur_leaf_count_per_tree,
@@ -403,6 +403,8 @@ __global__ void node_split(int *decision_trees,
         tree_idx * max_leaf_count_per_tree * counter_size_per_leaf;
 
     int *cur_leaf_back = leaf_back + tree_idx * max_leaf_count_per_tree;
+    
+    int *cur_attribute_val_arr = attribute_val_arr + tree_idx * attribute_count_per_tree;
 
     for (int leaf_idx = 0; leaf_idx < max_leaf_count_per_tree; leaf_idx++) {
         unsigned int decision = cur_node_split_decisions[leaf_idx];
@@ -431,7 +433,8 @@ __global__ void node_split(int *decision_trees,
         int left_leaf_pos = get_left(cur_leaf_pos_in_tree);
         int right_leaf_pos = get_right(cur_leaf_pos_in_tree);
 
-        cur_decision_tree[cur_leaf_pos_in_tree] = attribute_id;
+        // cur_decision_tree[cur_leaf_pos_in_tree] = attribute_id;
+        cur_decision_tree[cur_leaf_pos_in_tree] = cur_attribute_val_arr[attribute_id];
 
         cur_decision_tree[left_leaf_pos] = cur_leaf_val;
         cur_decision_tree[right_leaf_pos] = (1 << 31) | new_leaf_id;
@@ -645,6 +648,40 @@ int main(void) {
     }
     
 
+    // actual selected attributes for each tree for counter_increase kernel
+    int *h_attribute_val_arr;
+    int *d_attribute_val_arr;
+    int attribute_val_arr_len = TREE_COUNT * ATTRIBUTE_COUNT_PER_TREE;
+    
+    allocated = malloc(attribute_val_arr_len * sizeof(int));
+    if (allocated == NULL) {
+        cout << "host error: memory allocation for h_attribute_val_arr failed" << endl;
+    }
+    h_attribute_val_arr = (int*) allocated;
+
+    if (!allocate_memory_on_device(&d_attribute_val_arr, "attribute_val_arr",
+                attribute_val_arr_len)) {
+        return 1;
+    }
+
+    // select k random attributes for each tree
+    cout << "\nAttributes selected per tree: " << endl;
+    for (int tree_idx = 0; tree_idx < TREE_COUNT; tree_idx++) {
+        cout << "tree " << tree_idx << endl;
+
+        int *cur_attribute_val_arr = h_attribute_val_arr + tree_idx * ATTRIBUTE_COUNT_PER_TREE;
+        select_k_attributes(cur_attribute_val_arr, ATTRIBUTE_COUNT_TOTAL, ATTRIBUTE_COUNT_PER_TREE);
+        
+        for (int i = 0; i < ATTRIBUTE_COUNT_PER_TREE; i++) {
+            cout << cur_attribute_val_arr[i] << " ";
+        }
+        cout << endl;
+    }
+
+    gpuErrchk(cudaMemcpy(d_attribute_val_arr, h_attribute_val_arr, 
+                attribute_val_arr_len * sizeof(int), cudaMemcpyHostToDevice));
+
+
     // allocate memory for attribute indices on host for computing information gain
     int *h_attribute_idx_arr;
     int *d_attribute_idx_arr;
@@ -661,32 +698,21 @@ int main(void) {
                 attribute_idx_arr_len)) {
         return 1;
     }
-
-    cout << "\nAttributes selected per tree: " << endl;
+    
     for (int tree_idx = 0; tree_idx < TREE_COUNT; tree_idx++) {
         int *cur_tree_attribute_idx_arr = h_attribute_idx_arr + tree_idx * LEAF_COUNT_PER_TREE
             * ATTRIBUTE_COUNT_PER_TREE;
 
-        // select k random attributes for each tree
-        select_k_attributes(cur_tree_attribute_idx_arr, ATTRIBUTE_COUNT_TOTAL,
-                ATTRIBUTE_COUNT_PER_TREE);
-
-        cout << "tree " << tree_idx << endl;
-
-        for (int i = 0; i < ATTRIBUTE_COUNT_PER_TREE; i++) {
-            cout << cur_tree_attribute_idx_arr[i] << " ";
-        }
-        cout << endl;
-
-        for (int leaf_idx = 1; leaf_idx < LEAF_COUNT_PER_TREE; leaf_idx++) {
-            int *cur_leaf_attribute_idx_arr = cur_tree_attribute_idx_arr + leaf_idx *
+        for (int leaf_idx = 0; leaf_idx < LEAF_COUNT_PER_TREE; leaf_idx++) {
+            int *cur_attribute_idx_arr = cur_tree_attribute_idx_arr + leaf_idx * 
                 ATTRIBUTE_COUNT_PER_TREE;
 
             for (int i = 0; i < ATTRIBUTE_COUNT_PER_TREE; i++) {
-                cur_leaf_attribute_idx_arr[i] = cur_tree_attribute_idx_arr[i];
+                cur_attribute_idx_arr[i] = i;
             }
         }
     }
+
 
     // allocate memory for node_split_decisions
     unsigned int *h_node_split_decisions;
@@ -784,8 +810,6 @@ int main(void) {
             }
 
             h_data[h_data_idx++] = class_code_map[raw_data_row[ATTRIBUTE_COUNT_TOTAL]];
-
-            if (eof) break; // TODO
         }
 
         if (eof) break; // TODO
@@ -857,17 +881,13 @@ int main(void) {
 
         cout << "\nlaunching counter_increase kernel..." << endl;
         
-        // for sorting information gain array
-        gpuErrchk(cudaMemcpy(d_attribute_idx_arr, h_attribute_idx_arr, attribute_idx_arr_len *
-                    sizeof(int), cudaMemcpyHostToDevice));
-
         cout << "counter_increase result: " << endl;
         counter_increase
             <<<dim3(TREE_COUNT, INSTANCE_COUNT_PER_TREE), ATTRIBUTE_COUNT_PER_TREE>>>(
                     d_leaf_counters,
                     d_reached_leaf_ids,
                     d_data,
-                    d_attribute_idx_arr,
+                    d_attribute_val_arr,
                     CLASS_COUNT,
                     ATTRIBUTE_COUNT_PER_TREE,
                     ATTRIBUTE_COUNT_TOTAL,
@@ -905,6 +925,11 @@ int main(void) {
 
         
         cout << "\nlanuching compute_information_gain kernel..." << endl;
+        
+        // for sorting information gain array
+        gpuErrchk(cudaMemcpy(d_attribute_idx_arr, h_attribute_idx_arr, attribute_idx_arr_len *
+                    sizeof(int), cudaMemcpyHostToDevice));
+
 
         dim3 grid(TREE_COUNT, LEAF_COUNT_PER_TREE);
         thread_count = ATTRIBUTE_COUNT_PER_TREE * 2;
@@ -961,6 +986,7 @@ int main(void) {
                 d_leaf_counters,
                 d_leaf_class,
                 d_leaf_back,
+                d_attribute_val_arr,
                 d_samples_seen_count,
                 d_cur_node_count_per_tree,
                 d_cur_leaf_count_per_tree,
