@@ -6,9 +6,12 @@
 #include <iostream>
 #include <fstream>
 #include <sstream>
-#include <cmath>
+#include <math.h>
 #include <map>
 #include <iomanip>
+#include <cuda.h>
+#include <curand.h>
+#include <curand_kernel.h>
 #include <thrust/sort.h>
 #include <thrust/execution_policy.h>
 
@@ -87,12 +90,46 @@ vector<string> split(string str, string delim) {
     return arr;
 }
 
+__global__ void setup_kernel(curandState *state) {
+    int idx = threadIdx.x + blockDim.x * blockIdx.x;
+    curand_init(1234, idx, 0, &state[idx]);
+}
+
 __device__ unsigned int get_left(unsigned int index) {
     return 2 * index + 1; 
 }
 
 __device__ unsigned int get_right(unsigned int index) {
     return 2 * index + 2;
+}
+
+__device__ int get_rand(int low, int high, curandState *local_state) {
+    float randu_f = curand_uniform(local_state);
+    randu_f *= (high - low + 0.999999);
+    randu_f += low;
+    int randu_int = __float2int_rz(randu_f);
+
+    return randu_int;
+}
+
+__device__ int poisson(float lambda, curandState *local_state) {
+	float product = 1.0;
+	float sum = 1.0;
+
+    int rand_num = get_rand(0, 1000, local_state);
+
+	float next_double = (float) rand_num / 1000.0;
+	float threshold = next_double * exp(lambda);
+	int max_val = max(100, 10 * (int) (lambda));
+
+	int i = 1;
+	while ((i < max_val) && (sum <= threshold)) {
+		product *= (lambda / i);
+		sum += product;
+		i++;
+	}
+
+	return i - 1;
 }
 
 __global__ void tree_traversal(int *decision_trees, 
@@ -102,9 +139,11 @@ __global__ void tree_traversal(int *decision_trees,
         int *correct_counter,
         int *samples_seen_count,
         int *forest_vote,
+        int *weights,
         int node_count_per_tree,
         int leaf_count_per_tree,
-        int attribute_count_total) {
+        int attribute_count_total,
+        curandState *state) {
     // <<<TREE_COUNT, INSTANCE_COUNT_PER_TREE>>>
 
     int tree_idx = blockIdx.x;
@@ -138,6 +177,15 @@ __global__ void tree_traversal(int *decision_trees,
     // TODO hack!
     atomicAdd(&forest_vote[instance_idx], predicted_class == 0 ? -1 : 1);
 
+    // online bagging
+    int *cur_weights = weights + tree_idx * instance_count_per_tree;
+
+    // curand library poisson is super slow!
+    // cur_weights[instance_idx] = curand_poisson(state + thread_pos, 1.0);
+
+    cur_weights[instance_idx] = poisson(1.0, state + thread_pos);
+    // printf("==================================cur weight: %i\n", cur_weights[instance_idx]); 
+
     __syncthreads();
     
     if (tree_idx != 0) {
@@ -156,6 +204,7 @@ __global__ void counter_increase(int *leaf_counters,
         int *reached_leaf_ids,
         int *data,
         int *attribute_val_arr,
+        int *weights,
         int class_count,
         int attribute_count_per_tree,
         int attribute_count_total,
@@ -190,6 +239,8 @@ __global__ void counter_increase(int *leaf_counters,
     int reached_leaf_id = cur_reached_leaf_ids[instance_idx];
 
     int *cur_data = data + instance_idx * (attribute_count_total + 1);
+    int *cur_weights = weights + tree_idx * instance_count_per_tree;
+    int cur_weight = cur_weights[instance_idx];
 
     int *cur_attribute_val_arr = attribute_val_arr + tree_idx * attribute_count_per_tree;
 
@@ -207,8 +258,8 @@ __global__ void counter_increase(int *leaf_counters,
 
     // atomicAdd(&cur_leaf_counter[ij], mask); // row 0
     // atomicAdd(&cur_leaf_counter[n_ijk_idx], mask);
-    atomicAdd(&cur_leaf_counter[ij], 1); // row 0
-    atomicAdd(&cur_leaf_counter[n_ijk_idx], 1);
+    atomicAdd(&cur_leaf_counter[ij], cur_weight); // row 0
+    atomicAdd(&cur_leaf_counter[n_ijk_idx], cur_weight);
 }
 
 __global__ void compute_information_gain(int *leaf_counters, 
@@ -325,7 +376,7 @@ __global__ void compute_information_gain(int *leaf_counters,
 // n: the number of examples collected at the node
 __device__ float compute_hoeffding_bound(float range, float confidence, float n) {
     float result = sqrt(((range * range) * log(1.0 / confidence)) / (2.0 * n));
-    printf("=========> range: %f, confidence: %f, n: %f, result: %f\n", range, confidence, n, result);
+    // printf("=========> range: %f, confidence: %f, n: %f, result: %f\n", range, confidence, n, result);
     return result;
 }
 
@@ -501,12 +552,12 @@ __global__ void node_split(int *decision_trees,
 }
 
 int main(void) {
-    const int TREE_COUNT = 1;
+    const int TREE_COUNT = 100;
     cout << "Number of decision trees: " << TREE_COUNT << endl;
 
     const int INSTANCE_COUNT_PER_TREE = 1000;
     cout << "Instance count per tree: " << INSTANCE_COUNT_PER_TREE << endl;
-
+    
     // hoeffding bound parameters
     float n_min = 1000;
     float delta = 0.05; // pow((float) 10.0, -7);
@@ -518,7 +569,7 @@ int main(void) {
 
     // Use a different seed value for each run
     // srand(time(NULL));
-    
+
     ofstream output_file;
     output_file.open("result_gpu.txt");
 
@@ -560,9 +611,6 @@ int main(void) {
 
     cout << "NODE_COUNT_PER_TREE: " << NODE_COUNT_PER_TREE << endl;
     cout << "LEAF_COUNT_PER_TREE: " << LEAF_COUNT_PER_TREE << endl;
-
-    size_t memory_size;
-
 
     // init decision tree
     cout << "\nAllocating memory on host..." << endl;
@@ -783,6 +831,11 @@ int main(void) {
         return 1;
     }
 
+    int *d_weights;
+    if (!allocate_memory_on_device(&d_weights, "weights", TREE_COUNT * INSTANCE_COUNT_PER_TREE)) {
+        return 1;
+    }
+
     cout << "\nInitializing training data arrays..." << endl;
 
     int data_len = INSTANCE_COUNT_PER_TREE * (ATTRIBUTE_COUNT_TOTAL + 1);
@@ -803,6 +856,12 @@ int main(void) {
     int h_correct_counter = 0;
     int *d_correct_counter;
     cudaMalloc((void **) &d_correct_counter, sizeof(int));
+
+    curandState *d_state;
+    cudaMalloc(&d_state, TREE_COUNT * INSTANCE_COUNT_PER_TREE * sizeof(curandState));
+    
+    setup_kernel<<<TREE_COUNT, INSTANCE_COUNT_PER_TREE>>>(d_state);
+    cudaDeviceSynchronize();
 
     bool eof = false;
 
@@ -854,9 +913,11 @@ int main(void) {
                 d_correct_counter,
                 d_samples_seen_count,
                 d_forest_vote,
+                d_weights,
                 NODE_COUNT_PER_TREE,
                 LEAF_COUNT_PER_TREE,
-                ATTRIBUTE_COUNT_TOTAL);
+                ATTRIBUTE_COUNT_TOTAL,
+                d_state);
 
         gpuErrchk(cudaMemcpy(h_decision_trees, d_decision_trees, TREE_COUNT * NODE_COUNT_PER_TREE *
                     sizeof(int), cudaMemcpyDeviceToHost));
@@ -897,7 +958,7 @@ int main(void) {
         double accuracy = (double) h_correct_counter / INSTANCE_COUNT_PER_TREE;
         cout << "===============> " << " accuracy: " << accuracy << endl;
 
-        output_file << iter_count * INSTANCE_COUNT_PER_TREE * TREE_COUNT
+        output_file << iter_count * INSTANCE_COUNT_PER_TREE
             << " accuracy: " << accuracy << endl;
 
         cout << "\nlaunching counter_increase kernel..." << endl;
@@ -909,6 +970,7 @@ int main(void) {
                     d_reached_leaf_ids,
                     d_data,
                     d_attribute_val_arr,
+                    d_weights,
                     CLASS_COUNT,
                     ATTRIBUTE_COUNT_PER_TREE,
                     ATTRIBUTE_COUNT_TOTAL,
@@ -1020,8 +1082,7 @@ int main(void) {
         cout << "node_split completed" << endl;
 
         iter_count++;
-        // if (iter_count == 10) break;
-        // break; // TODO
+        // if (iter_count == 1) break; // TODO
     }
 
     cudaFree(d_decision_trees);
