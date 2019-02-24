@@ -17,7 +17,7 @@
 
 using namespace std;
 
-#define EPS 1e-5  
+#define EPS 1e-5
 #define IS_BIT_SET(val, pos) (val & (1 << pos))
 
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
@@ -323,7 +323,7 @@ __global__ void compute_information_gain(int *leaf_counters,
                 log_param = log(param);
             }
 
-            sum += -(param) * log_param;
+            sum += param * log_param;
         }
 
         cur_info_gain_vals[threadIdx.x] = -sum;
@@ -558,15 +558,6 @@ int main(void) {
     const int INSTANCE_COUNT_PER_TREE = 1000;
     cout << "Instance count per tree: " << INSTANCE_COUNT_PER_TREE << endl;
     
-    // hoeffding bound parameters
-    float n_min = 1000;
-    float delta = 0.05; // pow((float) 10.0, -7);
-    float r = 1;
-    cout << "hoeffding bound parameters: " << endl
-        << "n_min: " << n_min << endl
-        << "delta: " << delta << endl
-        << "r    : " << r     << endl;
-
     // Use a different seed value for each run
     // srand(time(NULL));
 
@@ -593,6 +584,16 @@ int main(void) {
     }
     const int CLASS_COUNT = line_count; 
     cout << "Number of classes: " << CLASS_COUNT << endl;
+    
+    // hoeffding bound parameters
+    float n_min = 1000;
+    float delta = 0.05; // pow((float) 10.0, -7);
+    float r = log2(CLASS_COUNT); // range of merit = log2(num_of_classes)
+    cout << "hoeffding bound parameters: " << endl
+        << "n_min: " << n_min << endl
+        << "delta: " << delta << endl
+        << "r    : " << r     << endl;
+
 
     // prepare attributes
     std::ifstream file("data/random-tree/synthetic_with_noise.csv");
@@ -956,7 +957,7 @@ int main(void) {
         gpuErrchk(cudaMemcpy(&h_correct_counter, d_correct_counter, sizeof(int), cudaMemcpyDeviceToHost));
         cout << "h_correct_counter: " << h_correct_counter << endl;
         double accuracy = (double) h_correct_counter / INSTANCE_COUNT_PER_TREE;
-        cout << "===============> " << " accuracy: " << accuracy << endl;
+        cout << "===============> " << "accuracy: " << accuracy << endl;
 
         output_file << iter_count * INSTANCE_COUNT_PER_TREE
             << " accuracy: " << accuracy << endl;
