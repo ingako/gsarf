@@ -14,6 +14,7 @@
 #include <curand_kernel.h>
 #include <thrust/sort.h>
 #include <thrust/execution_policy.h>
+#include "ADWIN.cu"
 
 using namespace std;
 
@@ -140,6 +141,7 @@ __global__ void tree_traversal(int *decision_trees,
         int *samples_seen_count,
         int *forest_vote,
         int *weights,
+        int *tree_error_count,
         int node_count_per_tree,
         int leaf_count_per_tree,
         int attribute_count_total,
@@ -173,6 +175,15 @@ __global__ void tree_traversal(int *decision_trees,
     atomicAdd(&cur_samples_seen_count[leaf_offset], 1);
 
     int predicted_class = cur_leaf_class[leaf_offset];
+    int actual_class = cur_data_line[attribute_count_total];
+
+    if (predicted_class != actual_class) {
+        atomicAdd(&tree_error_count[tree_idx], 1);
+    }
+
+    if (pos == 0) {
+        predicted_class = get_rand(0, 1, state + thread_pos);
+    }
 
     // TODO hack!
     atomicAdd(&forest_vote[instance_idx], predicted_class == 0 ? -1 : 1);
@@ -183,6 +194,7 @@ __global__ void tree_traversal(int *decision_trees,
     // curand library poisson is super slow!
     // cur_weights[instance_idx] = curand_poisson(state + thread_pos, 1.0);
 
+    // prepare weights to be used in counter_increase kernel
     cur_weights[instance_idx] = poisson(1.0, state + thread_pos);
     // printf("==================================cur weight: %i\n", cur_weights[instance_idx]); 
 
@@ -192,8 +204,7 @@ __global__ void tree_traversal(int *decision_trees,
         return;
     }
 
-    int voted_class = forest_vote[instance_idx] < 0 ? 0 : 1;
-    int actual_class = cur_data_line[attribute_count_total];
+    int voted_class = forest_vote[instance_idx] <= 0 ? 0 : 1;
 
     if (voted_class == actual_class) {
         atomicAdd(correct_counter, 1);
@@ -811,8 +822,6 @@ int main(void) {
     }  
     gpuErrchk(cudaMemcpy(d_cur_node_count_per_tree, h_cur_node_count_per_tree, 
                 TREE_COUNT * sizeof(int), cudaMemcpyHostToDevice));
-    // cudaMemset(d_cur_node_count_per_tree, 1, TREE_COUNT);
-
 
     int h_cur_leaf_count_per_tree[TREE_COUNT];
     int *d_cur_leaf_count_per_tree;
@@ -824,8 +833,6 @@ int main(void) {
     }
     gpuErrchk(cudaMemcpy(d_cur_leaf_count_per_tree, h_cur_leaf_count_per_tree, 
                  TREE_COUNT * sizeof(int), cudaMemcpyHostToDevice));
-    // cudaMemset(d_cur_leaf_count_per_tree, 1, TREE_COUNT);
-
 
     int *d_forest_vote;
     if (!allocate_memory_on_device(&d_forest_vote, "forest_vote", INSTANCE_COUNT_PER_TREE)) {
@@ -834,6 +841,15 @@ int main(void) {
 
     int *d_weights;
     if (!allocate_memory_on_device(&d_weights, "weights", TREE_COUNT * INSTANCE_COUNT_PER_TREE)) {
+        return 1;
+    }
+
+    // one drift detector per tree to monitor accuracy
+    ADWIN *drift_detectors = new ADWIN[TREE_COUNT];
+
+    int* h_tree_error_count = (int*) calloc(TREE_COUNT, sizeof(int));
+    int* d_tree_error_count;
+    if (!allocate_memory_on_device(&d_tree_error_count, "tree_error_count", TREE_COUNT)) {
         return 1;
     }
 
@@ -864,9 +880,11 @@ int main(void) {
     setup_kernel<<<TREE_COUNT, INSTANCE_COUNT_PER_TREE>>>(d_state);
     cudaDeviceSynchronize();
 
+    int counter_row_len = ATTRIBUTE_COUNT_PER_TREE * 2;
+    int iter_count = 0;
+
     bool eof = false;
 
-    int iter_count = 0;
     while (!eof) {
 
         cout << endl << "=================iteration " << iter_count
@@ -904,6 +922,9 @@ int main(void) {
         cudaMemset(d_correct_counter, 0, sizeof(int));
         gpuErrchk(cudaMemset(d_forest_vote, 0, INSTANCE_COUNT_PER_TREE * sizeof(int)));
 
+        gpuErrchk(cudaMemcpy(d_tree_error_count, h_tree_error_count, TREE_COUNT * sizeof(int),
+                    cudaMemcpyHostToDevice));
+
         cout << "launching " << block_count * thread_count << " threads for tree_traversal" << endl;
 
         tree_traversal<<<block_count, thread_count>>>(
@@ -915,6 +936,7 @@ int main(void) {
                 d_samples_seen_count,
                 d_forest_vote,
                 d_weights,
+                d_tree_error_count,
                 NODE_COUNT_PER_TREE,
                 LEAF_COUNT_PER_TREE,
                 ATTRIBUTE_COUNT_TOTAL,
@@ -929,6 +951,72 @@ int main(void) {
         gpuErrchk(cudaMemcpy((void *) h_samples_seen_count, (void *) d_samples_seen_count, 
                     samples_seen_count_len * sizeof(int), cudaMemcpyDeviceToHost));
 
+        gpuErrchk(cudaMemcpy((void *) h_tree_error_count, (void *) d_tree_error_count,
+                    TREE_COUNT * sizeof(int), cudaMemcpyDeviceToHost));
+
+        // if accuracy decreases, reset the tree
+        bool reseted = false;
+        for (int tree_idx = 0; tree_idx < TREE_COUNT; tree_idx++) {
+            ADWIN *estimation_error_weight = &drift_detectors[tree_idx];
+            double old_error = estimation_error_weight->getEstimation();
+
+            bool error_change = estimation_error_weight->setInput(h_tree_error_count[tree_idx]);
+            h_tree_error_count[tree_idx] = 0; // reset host to copy back to device
+
+            if (error_change && old_error > estimation_error_weight->getEstimation()) {
+                // if error is decreasing, do nothing
+                error_change = false;
+            }
+
+            if (!error_change) {
+                continue;
+            }
+
+            reseted = true;
+
+            // reset the tree
+            // TODO move to a cuda kernel
+            int *cur_decision_trees = h_decision_trees + tree_idx * NODE_COUNT_PER_TREE;
+            int *cur_leaf_back = h_leaf_back + tree_idx * LEAF_COUNT_PER_TREE;
+            int *cur_samples_seen_count = h_samples_seen_count + tree_idx * LEAF_COUNT_PER_TREE;
+
+            int *cur_leaf_counter = h_leaf_counters + tree_idx * LEAF_COUNT_PER_TREE *
+                leaf_counter_size;
+
+            cur_decision_trees[0] = (1 << 31);
+            cur_samples_seen_count[0] = 0; // new leaves gets reset in node_split
+            h_cur_node_count_per_tree[tree_idx] = 1;
+            h_cur_leaf_count_per_tree[tree_idx] = 1;
+
+            // reset root counter
+            for (int k = 0; k < CLASS_COUNT + 2; k++) {
+                for (int ij = 0; ij < counter_row_len; ij++) {
+                    cur_leaf_counter[k * counter_row_len + ij] = k == 1 ? 1 : 0;
+                }
+            }
+        }
+
+        if (reseted) {
+            gpuErrchk(cudaMemcpy(d_decision_trees, h_decision_trees, NODE_COUNT_PER_TREE
+                        * TREE_COUNT * sizeof(int), cudaMemcpyHostToDevice));
+
+            gpuErrchk(cudaMemcpy(d_leaf_back, h_leaf_back, LEAF_COUNT_PER_TREE * TREE_COUNT
+                        * sizeof(int),  cudaMemcpyHostToDevice));
+
+            gpuErrchk(cudaMemcpy(d_samples_seen_count, h_samples_seen_count, samples_seen_count_len
+                        * sizeof(int), cudaMemcpyHostToDevice));
+
+            gpuErrchk(cudaMemcpy(d_leaf_counters, h_leaf_counters, all_leaf_counters_size
+                        * TREE_COUNT * sizeof(int), cudaMemcpyHostToDevice));
+
+            gpuErrchk(cudaMemcpy(d_cur_leaf_count_per_tree, h_cur_leaf_count_per_tree,
+                        TREE_COUNT * sizeof(int), cudaMemcpyHostToDevice));
+
+            gpuErrchk(cudaMemcpy(d_cur_node_count_per_tree, h_cur_node_count_per_tree,
+                        TREE_COUNT * sizeof(int), cudaMemcpyHostToDevice));
+        }
+
+        // logging
         for (int tree_idx = 0; tree_idx < TREE_COUNT; tree_idx++) {
             cout << "tree " << tree_idx << endl;
             int *cur_decision_tree = h_decision_trees + tree_idx * NODE_COUNT_PER_TREE;
@@ -985,7 +1073,6 @@ int main(void) {
                     * sizeof(int), cudaMemcpyDeviceToHost));
 
 
-        int row_len = ATTRIBUTE_COUNT_PER_TREE * 2;
         for (int tree_idx = 0; tree_idx < TREE_COUNT; tree_idx++) {
             cout << "tree " << tree_idx << endl;
 
@@ -998,8 +1085,9 @@ int main(void) {
 
                 for (int k = 0; k < CLASS_COUNT + 2; k++) {
                     cout << "row " << k << ": ";
-                    for (int ij = 0; ij < row_len; ij++) {
-                        cout << right << setw(8) << cur_leaf_counter[k * row_len + ij] << " ";
+                    for (int ij = 0; ij < counter_row_len; ij++) {
+                        cout << right << setw(8)
+                            << cur_leaf_counter[k * counter_row_len + ij] << " ";
                     }
                     cout << endl;
                 }
