@@ -204,7 +204,12 @@ __global__ void tree_traversal(int *decision_trees,
         return;
     }
 
-    int voted_class = forest_vote[instance_idx] <= 0 ? 0 : 1;
+    int voted_class;
+    if (forest_vote[instance_idx] == 0) {
+        voted_class = get_rand(0, 1, state + thread_pos);
+    } else {
+        voted_class = forest_vote[instance_idx] < 0 ? 0 : 1;
+    }
 
     if (voted_class == actual_class) {
         atomicAdd(correct_counter, 1);
@@ -432,7 +437,7 @@ __global__ void compute_node_split_decisions(float *info_gain_vals,
 
     float hoeffding_bound = compute_hoeffding_bound(r, delta, samples_seen_count[thread_pos]);
 
-    unsigned int decision = 0;
+    int decision = 0;
     if (fabs(first_best - second_best) > hoeffding_bound) {
         // split on the best attribute
         decision |= (1 << 31);
@@ -482,7 +487,7 @@ __global__ void node_split(int *decision_trees,
     int *cur_attribute_val_arr = attribute_val_arr + tree_idx * attribute_count_per_tree;
 
     for (int leaf_idx = 0; leaf_idx < max_leaf_count_per_tree; leaf_idx++) {
-        unsigned int decision = cur_node_split_decisions[leaf_idx];
+        int decision = cur_node_split_decisions[leaf_idx];
         cur_node_split_decisions[leaf_idx] = 0;
 
         int *cur_leaf_counter = cur_tree_leaf_counters + leaf_idx * counter_size_per_leaf;
@@ -788,16 +793,16 @@ int main(void) {
 
 
     // allocate memory for node_split_decisions
-    unsigned int *h_node_split_decisions;
+    // unsigned int *h_node_split_decisions;
     unsigned int *d_node_split_decisions;
     int node_split_decisions_len = LEAF_COUNT_PER_TREE * TREE_COUNT;
 
-    allocated = malloc(node_split_decisions_len * sizeof(unsigned int));
-    if (allocated == NULL) {
-        cout << "host error: memory allocation for h_node_split_decisions failed" << endl;
-        return 1;
-    }
-    h_node_split_decisions = (unsigned int*) allocated;
+    // allocated = malloc(node_split_decisions_len * sizeof(unsigned int));
+    // if (allocated == NULL) {
+    //     cout << "host error: memory allocation for h_node_split_decisions failed" << endl;
+    //     return 1;
+    // }
+    // h_node_split_decisions = (unsigned int*) allocated;
 
     if (!allocate_memory_on_device(&d_node_split_decisions, "node_split_decisions", 
                 node_split_decisions_len)) {
@@ -882,6 +887,7 @@ int main(void) {
 
     int counter_row_len = ATTRIBUTE_COUNT_PER_TREE * 2;
     int iter_count = 0;
+    double mean_accuracy = 0;
 
     bool eof = false;
 
@@ -984,6 +990,7 @@ int main(void) {
                 leaf_counter_size;
 
             cur_decision_trees[0] = (1 << 31);
+            cur_leaf_back[0] = 0;
             cur_samples_seen_count[0] = 0; // new leaves gets reset in node_split
             h_cur_node_count_per_tree[tree_idx] = 1;
             h_cur_leaf_count_per_tree[tree_idx] = 1;
@@ -1043,12 +1050,18 @@ int main(void) {
         cout << "tree_traversal completed" << endl;
 
         gpuErrchk(cudaMemcpy(&h_correct_counter, d_correct_counter, sizeof(int), cudaMemcpyDeviceToHost));
+
         cout << "h_correct_counter: " << h_correct_counter << endl;
         double accuracy = (double) h_correct_counter / INSTANCE_COUNT_PER_TREE;
-        cout << "===============> " << "accuracy: " << accuracy << endl;
+        mean_accuracy = (iter_count * mean_accuracy + accuracy) / (iter_count + 1);
+
+        cout << "===============>" 
+            << " accuracy: " << left << setw(8) << accuracy 
+            << " mean accuracy: " << mean_accuracy << endl;
 
         output_file << iter_count * INSTANCE_COUNT_PER_TREE
-            << " accuracy: " << accuracy << endl;
+            << " accuracy: " << left << setw(8) << accuracy 
+            << " mean accuracy: " << mean_accuracy << endl;
 
         cout << "\nlaunching counter_increase kernel..." << endl;
         
