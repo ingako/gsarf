@@ -140,11 +140,13 @@ __global__ void tree_traversal(int *decision_trees,
         int *correct_counter,
         int *samples_seen_count,
         int *forest_vote,
+        int *forest_vote_idx_arr,
         int *weights,
         int *tree_error_count,
         int node_count_per_tree,
         int leaf_count_per_tree,
         int attribute_count_total,
+        int class_count,
         curandState *state) {
     // <<<TREE_COUNT, INSTANCE_COUNT_PER_TREE>>>
 
@@ -162,6 +164,7 @@ __global__ void tree_traversal(int *decision_trees,
     int *cur_reached_leaf_ids = reached_leaf_ids + tree_idx * instance_count_per_tree;
     int *cur_leaf_class = leaf_class + tree_idx * leaf_count_per_tree;
     int *cur_samples_seen_count = samples_seen_count + tree_idx * leaf_count_per_tree;
+    int *cur_forest_vote = forest_vote + instance_idx * class_count;
 
     int pos = 0;
     while (!IS_BIT_SET(cur_decision_tree[pos], 31)) {
@@ -185,8 +188,7 @@ __global__ void tree_traversal(int *decision_trees,
         predicted_class = get_rand(0, 1, state + thread_pos);
     }
 
-    // TODO hack!
-    atomicAdd(&forest_vote[instance_idx], predicted_class == 0 ? -1 : 1);
+    atomicAdd(&cur_forest_vote[predicted_class], 1);
 
     // online bagging
     int *cur_weights = weights + tree_idx * instance_count_per_tree;
@@ -204,12 +206,14 @@ __global__ void tree_traversal(int *decision_trees,
         return;
     }
 
-    int voted_class;
-    if (forest_vote[instance_idx] == 0) {
-        voted_class = get_rand(0, 1, state + thread_pos);
-    } else {
-        voted_class = forest_vote[instance_idx] < 0 ? 0 : 1;
-    }
+    int *cur_forest_vote_idx_arr = forest_vote_idx_arr + instance_idx * class_count;
+
+    thrust::sort_by_key(thrust::seq,
+            cur_forest_vote,
+            cur_forest_vote + class_count,
+            cur_forest_vote_idx_arr);
+
+    int voted_class = cur_forest_vote_idx_arr[class_count - 1];
 
     if (voted_class == actual_class) {
         atomicAdd(correct_counter, 1);
@@ -274,8 +278,9 @@ __global__ void counter_increase(int *leaf_counters,
 
     // atomicAdd(&cur_leaf_counter[ij], mask); // row 0
     // atomicAdd(&cur_leaf_counter[n_ijk_idx], mask);
-    atomicAdd(&cur_leaf_counter[ij], cur_weight); // row 0
-    atomicAdd(&cur_leaf_counter[n_ijk_idx], cur_weight);
+    // TODO weight
+    atomicAdd(&cur_leaf_counter[ij], 1); // cur_weight); // row 0
+    atomicAdd(&cur_leaf_counter[n_ijk_idx], 1); // cur_weight);
 }
 
 __global__ void compute_information_gain(int *leaf_counters, 
@@ -327,7 +332,7 @@ __global__ void compute_information_gain(int *leaf_counters,
 
             // float param = a_ijk / a_ij; // TODO float division by zero returns INF
             // asm("max.f32 %0, %1, %2;" : "=f"(param) : "f"(param), "f"((float) 0.0));
-            // sum += -(param) * log(param);
+            // sum += param * log(param);
 
             float param = 0.0;
             if (a_ijk != 0) { // && a_ij != 0) {
@@ -568,7 +573,7 @@ __global__ void node_split(int *decision_trees,
 }
 
 int main(void) {
-    const int TREE_COUNT = 100;
+    const int TREE_COUNT = 1;
     cout << "Number of decision trees: " << TREE_COUNT << endl;
 
     const int INSTANCE_COUNT_PER_TREE = 1000;
@@ -839,8 +844,21 @@ int main(void) {
     gpuErrchk(cudaMemcpy(d_cur_leaf_count_per_tree, h_cur_leaf_count_per_tree, 
                  TREE_COUNT * sizeof(int), cudaMemcpyHostToDevice));
 
+    int forest_vote_len = INSTANCE_COUNT_PER_TREE * CLASS_COUNT;
     int *d_forest_vote;
-    if (!allocate_memory_on_device(&d_forest_vote, "forest_vote", INSTANCE_COUNT_PER_TREE)) {
+    if (!allocate_memory_on_device(&d_forest_vote, "forest_vote", forest_vote_len)) {
+        return 1;
+    }
+
+    int h_forest_vote_idx_arr[forest_vote_len];
+    for (int i = 0; i < INSTANCE_COUNT_PER_TREE; i++) {
+        for (int j = 0; j < CLASS_COUNT; j++) {
+            h_forest_vote_idx_arr[i * CLASS_COUNT + j] = j;
+        }
+    }
+    int *d_forest_vote_idx_arr;
+    if (!allocate_memory_on_device(&d_forest_vote_idx_arr, "forest_vote_idx_arr",
+                forest_vote_len)) {
         return 1;
     }
 
@@ -926,10 +944,13 @@ int main(void) {
         thread_count = INSTANCE_COUNT_PER_TREE;
 
         cudaMemset(d_correct_counter, 0, sizeof(int));
-        gpuErrchk(cudaMemset(d_forest_vote, 0, INSTANCE_COUNT_PER_TREE * sizeof(int)));
+        gpuErrchk(cudaMemset(d_forest_vote, 0, forest_vote_len * sizeof(int)));
 
         gpuErrchk(cudaMemcpy(d_tree_error_count, h_tree_error_count, TREE_COUNT * sizeof(int),
                     cudaMemcpyHostToDevice));
+
+        gpuErrchk(cudaMemcpy(d_forest_vote_idx_arr, h_forest_vote_idx_arr, forest_vote_len *
+                    sizeof(int), cudaMemcpyHostToDevice));
 
         cout << "launching " << block_count * thread_count << " threads for tree_traversal" << endl;
 
@@ -941,11 +962,13 @@ int main(void) {
                 d_correct_counter,
                 d_samples_seen_count,
                 d_forest_vote,
+                d_forest_vote_idx_arr,
                 d_weights,
                 d_tree_error_count,
                 NODE_COUNT_PER_TREE,
                 LEAF_COUNT_PER_TREE,
                 ATTRIBUTE_COUNT_TOTAL,
+                CLASS_COUNT,
                 d_state);
 
         gpuErrchk(cudaMemcpy(h_decision_trees, d_decision_trees, TREE_COUNT * NODE_COUNT_PER_TREE *
@@ -1004,6 +1027,9 @@ int main(void) {
         }
 
         if (reseted) {
+
+            output_file << "adwin: change detected" << endl;
+
             gpuErrchk(cudaMemcpy(d_decision_trees, h_decision_trees, NODE_COUNT_PER_TREE
                         * TREE_COUNT * sizeof(int), cudaMemcpyHostToDevice));
 
