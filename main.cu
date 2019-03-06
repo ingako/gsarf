@@ -527,18 +527,34 @@ __global__ void node_split(int *decision_trees,
         cur_leaf_back[old_leaf_id] = left_leaf_pos;
         cur_leaf_back[new_leaf_id] = right_leaf_pos;
 
-        // TODO only work for binary class case
-        // left
-        int class0_count = cur_leaf_counter[attribute_count_per_tree * 2 * 2 + attribute_id * 2];
-        int class1_count = cur_leaf_counter[attribute_count_per_tree * 2 * 3 + attribute_id * 2];
+        int left_max_class_code = 0;
+        int left_max_count = cur_leaf_counter[attribute_count_per_tree * 2 * 2
+            + attribute_id * 2];
 
-        cur_leaf_class[old_leaf_id] = class0_count > class1_count ? 0 : 1;
+        int right_max_class_code = 0;
+        int right_max_count = cur_leaf_counter[attribute_count_per_tree * 2 * 2
+            + attribute_id * 2 + 1];
 
-        // right
-        class0_count = cur_leaf_counter[attribute_count_per_tree * 2 * 2 + attribute_id * 2 + 1];
-        class1_count = cur_leaf_counter[attribute_count_per_tree * 2 * 3 + attribute_id * 2 + 1];
+        for (int k = 1; k < class_count; k++) {
+            // left
+            int cur_class_count = cur_leaf_counter[attribute_count_per_tree * 2 * (k + 2) +
+                attribute_id * 2];
+            if (cur_class_count > left_max_count) {
+                left_max_count = cur_class_count;
+                left_max_class_code = k;
+            }
 
-        cur_leaf_class[new_leaf_id] = class0_count > class1_count ? 0 : 1;
+            // right
+            cur_class_count = cur_leaf_counter[attribute_count_per_tree * 2 * (k + 2) +
+                attribute_id * 2 + 1];
+            if (cur_class_count > right_max_count) {
+                right_max_count = cur_class_count;
+                right_max_class_code = k;
+            }
+        }
+
+        cur_leaf_class[old_leaf_id] = left_max_class_code;
+        cur_leaf_class[new_leaf_id] = right_max_class_code;
 
         // reset current leaf_counter and add copy mask to a new leaf counter
         int *new_leaf_counter = cur_tree_leaf_counters + cur_leaf_count * counter_size_per_leaf;
