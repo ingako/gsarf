@@ -599,10 +599,11 @@ int main(void) {
     // srand(time(NULL));
 
     ofstream output_file;
-    output_file.open("result_gpu.txt");
+    output_file.open("result_gpu_covtype.txt");
 
     cout << "Reading class file..." << endl; 
-    ifstream class_file("data/random-tree/labels.txt");
+    // ifstream class_file("data/random-tree/labels.txt");
+    ifstream class_file("data/covtype/labels.txt");
     string class_line;
 
     // init mapping between class and code
@@ -613,10 +614,10 @@ int main(void) {
     string code_str, class_str;
 
     int line_count = 0;
-    while (class_file >> code_str >> class_str) {
-        int code_int = atoi(code_str.c_str());
-        class_code_map[class_str] = code_int;
-        code_class_map[code_int] = class_str;
+    while (class_file >> class_str) {
+        int class_code = line_count;
+        class_code_map[class_str] = class_code;
+        code_class_map[class_code] = class_str;
         line_count++;
     }
     const int CLASS_COUNT = line_count; 
@@ -633,7 +634,17 @@ int main(void) {
 
 
     // prepare attributes
-    std::ifstream file("data/random-tree/synthetic_with_noise.csv");
+    // std::ifstream file("data/random-tree/synthetic_with_noise.csv");
+    string data_path = "data/covtype/covtype_binary_attributes.csv";
+
+    std::ifstream file(data_path);
+    if (file) {
+        cout << "Reading file from " << data_path << endl;
+    } else {
+        cout << "Cannot read file from " << data_path << endl;
+        return 1;
+    }
+
     string line;
 
     getline(file, line);
@@ -941,8 +952,8 @@ int main(void) {
             raw_data_row = split(line, ",");
 
             for (int i = 0; i < ATTRIBUTE_COUNT_TOTAL; i++) {
-                int val = strcmp(raw_data_row[i].c_str(), (const char*) "value1") == 0
-                    ? 0 : 1;
+                // int val = strcmp(raw_data_row[i].c_str(), (const char*) "value1") == 0 ? 0 : 1;
+                int val = stoi(raw_data_row[i]);
                 h_data[h_data_idx++] = val;
             }
 
