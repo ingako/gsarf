@@ -186,7 +186,7 @@ __global__ void tree_traversal(int *decision_trees,
     }
 
     if (pos == 0) {
-        predicted_class = get_rand(0, 1, state + thread_pos);
+        predicted_class = get_rand(0, class_count - 1, state + thread_pos);
     }
 
     atomicAdd(&cur_forest_vote[predicted_class], 1);
@@ -641,7 +641,7 @@ int main(int argc, char *argv[]) {
     // prepare attributes
     string line;
     getline(data_file, line);
-// const int ATTRIBUTE_COUNT_TOTAL = split_attributes(line, ',').size() - 2; // for activity-recognition dataset
+
     const int ATTRIBUTE_COUNT_TOTAL = split(line, ",").size() - 1;
     const int ATTRIBUTE_COUNT_PER_TREE = (int) sqrt(ATTRIBUTE_COUNT_TOTAL);
 
@@ -708,13 +708,13 @@ int main(int argc, char *argv[]) {
     int *h_decision_trees = (int*) allocated;
     int *d_decision_trees;
 
+#if DEBUG
     allocated = malloc(LEAF_COUNT_PER_TREE * TREE_COUNT * sizeof(int));
     if (allocated == NULL) {
         cout << "host error: memory allocation for leaf_class failed" << endl;
         return 1;
     }
     int *h_leaf_class = (int*) allocated; // stores the class for a given leaf
-    int *d_leaf_class;
 
     allocated = malloc(LEAF_COUNT_PER_TREE * TREE_COUNT * sizeof(int));
     if (allocated == NULL) {
@@ -722,7 +722,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     int *h_leaf_back = (int*) allocated; // reverse pointer to map a leaf id to an offset in the tree array
-    int *d_leaf_back;
+#endif
 
     cout << "Init: set root as leaf for each tree in the forest..." << endl;
     for (int i = 0; i < TREE_COUNT; i++) {
@@ -748,10 +748,12 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    int *d_leaf_class;
     if (!allocate_memory_on_device(&d_leaf_class, "leaf_class", LEAF_COUNT_PER_TREE * TREE_COUNT)) {
         return 1;
     }
 
+    int *d_leaf_back;
     if (!allocate_memory_on_device(&d_leaf_back, "leaf_back", LEAF_COUNT_PER_TREE * TREE_COUNT)) {
         return 1;
     }
@@ -966,7 +968,10 @@ int main(int argc, char *argv[]) {
     setup_kernel<<<TREE_COUNT, INSTANCE_COUNT_PER_TREE>>>(d_state);
     cudaDeviceSynchronize();
 
+#if DEBUG
     int counter_row_len = ATTRIBUTE_COUNT_PER_TREE * 2;
+#endif
+
     int iter_count = 0;
     double mean_accuracy = 0;
 
@@ -1006,11 +1011,12 @@ int main(int argc, char *argv[]) {
         block_count = TREE_COUNT;
         thread_count = INSTANCE_COUNT_PER_TREE;
 
-        cudaMemset(d_correct_counter, 0, sizeof(int));
+        gpuErrchk(cudaMemset(d_correct_counter, 0, sizeof(int)));
         gpuErrchk(cudaMemset(d_forest_vote, 0, forest_vote_len * sizeof(int)));
+        gpuErrchk(cudaMemset(d_tree_error_count, 0, TREE_COUNT * sizeof(int)));
 
-        gpuErrchk(cudaMemcpy(d_tree_error_count, h_tree_error_count, TREE_COUNT * sizeof(int),
-                    cudaMemcpyHostToDevice));
+        // gpuErrchk(cudaMemcpy(d_tree_error_count, h_tree_error_count, TREE_COUNT * sizeof(int),
+        //             cudaMemcpyHostToDevice));
 
         gpuErrchk(cudaMemcpy(d_forest_vote_idx_arr, h_forest_vote_idx_arr, forest_vote_len *
                     sizeof(int), cudaMemcpyHostToDevice));
@@ -1034,6 +1040,7 @@ int main(int argc, char *argv[]) {
                 CLASS_COUNT,
                 d_state);
 
+#if DEBUG
         gpuErrchk(cudaMemcpy(h_decision_trees, d_decision_trees, TREE_COUNT * NODE_COUNT_PER_TREE *
                     sizeof(int), cudaMemcpyDeviceToHost));
 
@@ -1042,12 +1049,12 @@ int main(int argc, char *argv[]) {
 
         gpuErrchk(cudaMemcpy((void *) h_samples_seen_count, (void *) d_samples_seen_count, 
                     samples_seen_count_len * sizeof(int), cudaMemcpyDeviceToHost));
+#endif
 
         gpuErrchk(cudaMemcpy((void *) h_tree_error_count, (void *) d_tree_error_count,
                     TREE_COUNT * sizeof(int), cudaMemcpyDeviceToHost));
 
         // if accuracy decreases, reset the tree
-        bool reseted = false;
         for (int tree_idx = 0; tree_idx < TREE_COUNT; tree_idx++) {
             ADWIN *estimation_error_weight = &drift_detectors[tree_idx];
             double old_error = estimation_error_weight->getEstimation();
@@ -1064,55 +1071,32 @@ int main(int argc, char *argv[]) {
                 continue;
             }
 
-            reseted = true;
+            output_file << "adwin: change detected" << endl;
 
             // reset the tree
             // TODO move to a cuda kernel
-            int *cur_decision_trees = h_decision_trees + tree_idx * NODE_COUNT_PER_TREE;
-            int *cur_leaf_back = h_leaf_back + tree_idx * LEAF_COUNT_PER_TREE;
-            int *cur_samples_seen_count = h_samples_seen_count + tree_idx * LEAF_COUNT_PER_TREE;
+            int *cur_decision_trees = d_decision_trees + tree_idx * NODE_COUNT_PER_TREE;
+            int *cur_leaf_back = d_leaf_back + tree_idx * LEAF_COUNT_PER_TREE;
+            int *cur_samples_seen_count = d_samples_seen_count + tree_idx * LEAF_COUNT_PER_TREE;
 
-            int *cur_leaf_counter = h_leaf_counters + tree_idx * LEAF_COUNT_PER_TREE *
+            int *cur_leaf_counter = d_leaf_counters + tree_idx * LEAF_COUNT_PER_TREE *
                 leaf_counter_size;
 
-            cur_decision_trees[0] = (1 << 31);
-            cur_leaf_back[0] = 0;
-            cur_samples_seen_count[0] = 0; // new leaves gets reset in node_split
-            h_cur_node_count_per_tree[tree_idx] = 1;
-            h_cur_leaf_count_per_tree[tree_idx] = 1;
+            gpuErrchk(cudaMemset(cur_decision_trees, (1 << 31), sizeof(int)));
+            gpuErrchk(cudaMemset(cur_leaf_back, 0, sizeof(int)));
+            gpuErrchk(cudaMemset(cur_samples_seen_count, 0, sizeof(int)));
+            gpuErrchk(cudaMemset(d_cur_node_count_per_tree + tree_idx, 1, sizeof(int)));
+            gpuErrchk(cudaMemset(d_cur_leaf_count_per_tree + tree_idx, 1, sizeof(int)));
 
-            // reset root counter
-            for (int k = 0; k < CLASS_COUNT + 2; k++) {
-                for (int ij = 0; ij < counter_row_len; ij++) {
-                    cur_leaf_counter[k * counter_row_len + ij] = k == 1 ? 1 : 0;
-                }
-            }
+            // TODO reset root counter
+            // for (int k = 0; k < CLASS_COUNT + 2; k++) {
+            //     for (int ij = 0; ij < counter_row_len; ij++) {
+            //         cur_leaf_counter[k * counter_row_len + ij] = k == 1 ? 1 : 0;
+            //     }
+            // }
         }
 
-        if (reseted) {
-
-            output_file << "adwin: change detected" << endl;
-
-            gpuErrchk(cudaMemcpy(d_decision_trees, h_decision_trees, NODE_COUNT_PER_TREE
-                        * TREE_COUNT * sizeof(int), cudaMemcpyHostToDevice));
-
-            gpuErrchk(cudaMemcpy(d_leaf_back, h_leaf_back, LEAF_COUNT_PER_TREE * TREE_COUNT
-                        * sizeof(int),  cudaMemcpyHostToDevice));
-
-            gpuErrchk(cudaMemcpy(d_samples_seen_count, h_samples_seen_count, samples_seen_count_len
-                        * sizeof(int), cudaMemcpyHostToDevice));
-
-            gpuErrchk(cudaMemcpy(d_leaf_counters, h_leaf_counters, all_leaf_counters_size
-                        * TREE_COUNT * sizeof(int), cudaMemcpyHostToDevice));
-
-            gpuErrchk(cudaMemcpy(d_cur_leaf_count_per_tree, h_cur_leaf_count_per_tree,
-                        TREE_COUNT * sizeof(int), cudaMemcpyHostToDevice));
-
-            gpuErrchk(cudaMemcpy(d_cur_node_count_per_tree, h_cur_node_count_per_tree,
-                        TREE_COUNT * sizeof(int), cudaMemcpyHostToDevice));
-        }
-
-        // logging
+#if DEBUG
         for (int tree_idx = 0; tree_idx < TREE_COUNT; tree_idx++) {
             cout << "tree " << tree_idx << endl;
             int *cur_decision_tree = h_decision_trees + tree_idx * NODE_COUNT_PER_TREE;
@@ -1135,6 +1119,7 @@ int main(int argc, char *argv[]) {
             }
             cout << endl;
         }
+#endif
 
         cout << "tree_traversal completed" << endl;
 
@@ -1154,7 +1139,6 @@ int main(int argc, char *argv[]) {
 
         cout << "\nlaunching counter_increase kernel..." << endl;
         
-        cout << "counter_increase result: " << endl;
         counter_increase
             <<<dim3(TREE_COUNT, INSTANCE_COUNT_PER_TREE), ATTRIBUTE_COUNT_PER_TREE>>>(
                     d_leaf_counters,
@@ -1168,13 +1152,14 @@ int main(int argc, char *argv[]) {
                     LEAF_COUNT_PER_TREE,
                     leaf_counter_size);
 
-        // TODO: for testing only
+#if DEBUG
         gpuErrchk(cudaMemcpy(h_leaf_counters, d_leaf_counters, all_leaf_counters_size 
                     * sizeof(int), cudaMemcpyDeviceToHost));
         gpuErrchk(cudaMemcpy(h_cur_leaf_count_per_tree, d_cur_leaf_count_per_tree, TREE_COUNT 
                     * sizeof(int), cudaMemcpyDeviceToHost));
 
 
+        cout << "counter_increase result: " << endl;
         for (int tree_idx = 0; tree_idx < TREE_COUNT; tree_idx++) {
             cout << "tree " << tree_idx << endl;
 
@@ -1184,7 +1169,6 @@ int main(int argc, char *argv[]) {
 
             for (int leaf_idx = 0; leaf_idx < h_cur_leaf_count_per_tree[tree_idx]; leaf_idx++) {
                 int *cur_leaf_counter = cur_tree_leaf_counter + leaf_idx * leaf_counter_size;
-
                 for (int k = 0; k < CLASS_COUNT + 2; k++) {
                     cout << "row " << k << ": ";
                     for (int ij = 0; ij < counter_row_len; ij++) {
@@ -1196,8 +1180,8 @@ int main(int argc, char *argv[]) {
             }
             cout << endl;
         }
+#endif
 
-        
         cout << "\nlanuching compute_information_gain kernel..." << endl;
         
         // for sorting information gain array
@@ -1228,6 +1212,7 @@ int main(int argc, char *argv[]) {
                 delta,
                 d_samples_seen_count);
         
+#if DEBUG
         // log info_gain_vals
         gpuErrchk(cudaMemcpy(h_info_gain_vals, d_info_gain_vals, info_gain_vals_len *
                     sizeof(float), cudaMemcpyDeviceToHost));
@@ -1249,6 +1234,7 @@ int main(int argc, char *argv[]) {
             }
             cout << endl;
         }
+#endif
 
         cout << "compute_node_split_decisions completed" << endl;
 
@@ -1273,7 +1259,6 @@ int main(int argc, char *argv[]) {
         cout << "node_split completed" << endl;
 
         iter_count++;
-        // if (iter_count == 1) break; // TODO
     }
 
     cudaFree(d_decision_trees);
