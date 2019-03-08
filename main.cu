@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 #include <string.h>
 #include <limits.h>
 #include <vector>
@@ -588,22 +589,83 @@ __global__ void node_split(int *decision_trees,
     cur_leaf_count_per_tree[tree_idx] = cur_leaf_count;
 }
 
-int main(void) {
-    const int TREE_COUNT = 1;
-    cout << "Number of decision trees: " << TREE_COUNT << endl;
+int main(int argc, char *argv[]) {
 
-    const int INSTANCE_COUNT_PER_TREE = 1000;
-    cout << "Instance count per tree: " << INSTANCE_COUNT_PER_TREE << endl;
-    
-    // Use a different seed value for each run
-    // srand(time(NULL));
+    int TREE_COUNT = 1;
+    int INSTANCE_COUNT_PER_TREE = 1000;
 
+    int opt;
+    while ((opt = getopt(argc, argv, "t:i:r")) != -1) {
+        switch (opt) {
+            case 't':
+                TREE_COUNT = atoi(optarg);
+                break;
+            case 'i':
+                INSTANCE_COUNT_PER_TREE = atoi(optarg);
+                break;
+            case 'r':
+                // Use a different seed value for each run
+                srand(time(NULL));
+                break;
+        }
+    }
+
+    cout << "TREE_COUNT = " << TREE_COUNT << endl
+        << "INSTANCE_COUNT_PER_TREE = " << INSTANCE_COUNT_PER_TREE << endl;
+
+
+    string output_path = "result_gpu_covtype.txt";
     ofstream output_file;
-    output_file.open("result_gpu_covtype.txt");
+    output_file.open(output_path);
 
-    cout << "Reading class file..." << endl; 
-    // ifstream class_file("data/random-tree/labels.txt");
-    ifstream class_file("data/covtype/labels.txt");
+    cout << endl;
+    if (output_file.fail()) {
+        cout << "Error opening output file at " << output_path << endl;
+    } else {
+        cout << "Writing output to " << output_path << endl;
+    }
+
+
+    // read data file
+    string data_path = "data/covtype/covtype_binary_attributes.csv";
+    ifstream data_file(data_path);
+
+    cout << endl;
+    if (data_file) {
+        cout << "Reading data file from " << data_path << " succeeded." << endl;
+    } else {
+        cout << "Error reading file from " << data_path << endl;
+        return 1;
+    }
+
+    // prepare attributes
+    string line;
+    getline(data_file, line);
+// const int ATTRIBUTE_COUNT_TOTAL = split_attributes(line, ',').size() - 2; // for activity-recognition dataset
+    const int ATTRIBUTE_COUNT_TOTAL = split(line, ",").size() - 1;
+    const int ATTRIBUTE_COUNT_PER_TREE = (int) sqrt(ATTRIBUTE_COUNT_TOTAL);
+
+    cout << "ATTRIBUTE_COUNT_TOTAL = " << ATTRIBUTE_COUNT_TOTAL << endl;
+    cout << "ATTRIBUTE_COUNT_PER_TREE = " << ATTRIBUTE_COUNT_PER_TREE << endl;
+
+    const unsigned int NODE_COUNT_PER_TREE = (1 << (ATTRIBUTE_COUNT_PER_TREE + 1)) - 1;
+    const unsigned int LEAF_COUNT_PER_TREE = (1 << ATTRIBUTE_COUNT_PER_TREE);
+
+    cout << "NODE_COUNT_PER_TREE = " << NODE_COUNT_PER_TREE << endl;
+    cout << "LEAF_COUNT_PER_TREE = " << LEAF_COUNT_PER_TREE << endl;
+
+
+    // read class/label file
+    string class_path = "data/covtype/labels.txt";
+    ifstream class_file(class_path);
+
+    cout << endl;
+    if (class_file) {
+        cout << "Reading class file from " << class_path << " succeeded." << endl;
+    } else {
+        cout << "Error reading class file from " << class_path << endl;
+    }
+
     string class_line;
 
     // init mapping between class and code
@@ -621,45 +683,19 @@ int main(void) {
         line_count++;
     }
     const int CLASS_COUNT = line_count; 
-    cout << "Number of classes: " << CLASS_COUNT << endl;
-    
+    cout << "CLASS_COUNT = " << CLASS_COUNT << endl;
+
     // hoeffding bound parameters
     float n_min = 1000;
     float delta = 0.05; // pow((float) 10.0, -7);
     float r = log2(CLASS_COUNT); // range of merit = log2(num_of_classes)
-    cout << "hoeffding bound parameters: " << endl
-        << "n_min: " << n_min << endl
-        << "delta: " << delta << endl
-        << "r    : " << r     << endl;
 
+    cout << endl
+        << "hoeffding bound parameters: " << endl
+        << "n_min = " << n_min << endl
+        << "delta = " << delta << endl
+        << "r     = " << r     << endl;
 
-    // prepare attributes
-    // std::ifstream file("data/random-tree/synthetic_with_noise.csv");
-    string data_path = "data/covtype/covtype_binary_attributes.csv";
-
-    std::ifstream file(data_path);
-    if (file) {
-        cout << "Reading file from " << data_path << endl;
-    } else {
-        cout << "Cannot read file from " << data_path << endl;
-        return 1;
-    }
-
-    string line;
-
-    getline(file, line);
-    // const int ATTRIBUTE_COUNT_TOTAL = split_attributes(line, ',').size() - 2; // for activity-recognition dataset
-    const int ATTRIBUTE_COUNT_TOTAL = split(line, ",").size() - 1;
-    const int ATTRIBUTE_COUNT_PER_TREE = (int) sqrt(ATTRIBUTE_COUNT_TOTAL);
-
-    cout << "Attribute count total: " << ATTRIBUTE_COUNT_TOTAL << endl;
-    cout << "Attribute count per tree: " << ATTRIBUTE_COUNT_PER_TREE << endl;
-
-    const unsigned int NODE_COUNT_PER_TREE = (1 << (ATTRIBUTE_COUNT_PER_TREE + 1)) - 1;
-    const unsigned int LEAF_COUNT_PER_TREE = (1 << ATTRIBUTE_COUNT_PER_TREE);
-
-    cout << "NODE_COUNT_PER_TREE: " << NODE_COUNT_PER_TREE << endl;
-    cout << "LEAF_COUNT_PER_TREE: " << LEAF_COUNT_PER_TREE << endl;
 
     // init decision tree
     cout << "\nAllocating memory on host..." << endl;
@@ -775,7 +811,7 @@ int main(void) {
     }
 
     // select k random attributes for each tree
-    cout << "\nAttributes selected per tree: " << endl;
+    output_file << "\nAttributes selected per tree: " << endl;
     for (int tree_idx = 0; tree_idx < TREE_COUNT; tree_idx++) {
         output_file << "tree " << tree_idx << endl;
 
@@ -944,7 +980,7 @@ int main(void) {
 
         int h_data_idx = 0;
         for (int instance_idx = 0; instance_idx < INSTANCE_COUNT_PER_TREE; instance_idx++) {
-            if (!getline(file, line)) {
+            if (!getline(data_file, line)) {
                 eof = true;
                 break;
             }
