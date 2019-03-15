@@ -387,7 +387,9 @@ ADWIN::~ADWIN() {
 }
 
 void ADWIN::init() {
-	mdbldelta = .002; //.1;
+	mdbldelta = .001; //.1;
+	// mdbldelta = .002; //.1;
+
 	mintTime = 0;
 	mintClock = 32;
 	mdblWidth = 0; // Mean of Width = mdblWidth/Number of items
