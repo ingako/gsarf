@@ -680,16 +680,24 @@ int main(int argc, char *argv[]) {
 
     int TREE_COUNT = 1;
     int INSTANCE_COUNT_PER_TREE = 1000;
+    string data_path = "data/covtype";
+    string data_file_name = "covtype_binary_attributes.csv";
     bool ENABLE_BACKGROUND_TREES = false;
 
     int opt;
-    while ((opt = getopt(argc, argv, "t:i:br")) != -1) {
+    while ((opt = getopt(argc, argv, "t:i:p:n:br")) != -1) {
         switch (opt) {
             case 't':
                 TREE_COUNT = atoi(optarg);
                 break;
             case 'i':
                 INSTANCE_COUNT_PER_TREE = atoi(optarg);
+                break;
+            case 'p':
+                data_path = optarg;
+                break;
+            case 'n':
+                data_file_name = optarg;
                 break;
             case 'b':
                 ENABLE_BACKGROUND_TREES = true;
@@ -708,7 +716,7 @@ int main(int argc, char *argv[]) {
         << "INSTANCE_COUNT_PER_TREE = " << INSTANCE_COUNT_PER_TREE << endl;
 
 
-    string output_path = "result_gpu_covtype.txt";
+    string output_path = data_path + "/result_gpu.txt";
     ofstream output_file;
     output_file.open(output_path);
 
@@ -721,14 +729,14 @@ int main(int argc, char *argv[]) {
 
 
     // read data file
-    string data_path = "data/covtype/covtype_binary_attributes.csv";
-    ifstream data_file(data_path);
+    string csv_path = data_path + "/" + data_file_name;
+    ifstream data_file(csv_path);
 
     cout << endl;
     if (data_file) {
-        cout << "Reading data file from " << data_path << " succeeded." << endl;
+        cout << "Reading data file from " << csv_path << " succeeded." << endl;
     } else {
-        cout << "Error reading file from " << data_path << endl;
+        cout << "Error reading file from " << csv_path << endl;
         return 1;
     }
 
@@ -750,7 +758,7 @@ int main(int argc, char *argv[]) {
 
 
     // read class/label file
-    string class_path = "data/covtype/labels.txt";
+    string class_path = data_path + "/labels.txt";
     ifstream class_file(class_path);
 
     cout << endl;
@@ -1100,13 +1108,9 @@ int main(int argc, char *argv[]) {
 
     while (!eof) {
 
-        cout << endl << "=================iteration " << iter_count
-            << "=================" << endl;
-        cout << "preparing data..." << endl;
-
+        int h_data_idx = 0;
         int class_count_arr[CLASS_COUNT] = { 0 };
 
-        int h_data_idx = 0;
         for (int instance_idx = 0; instance_idx < INSTANCE_COUNT_PER_TREE; instance_idx++) {
             if (!getline(data_file, line)) {
                 eof = true;
@@ -1127,10 +1131,17 @@ int main(int argc, char *argv[]) {
             h_data_idx++;
         }
 
-        if (eof) break; // TODO
+        if (eof) {
+            cout << "\ntraining completed" << endl;
+            break; // TODO
+        }
+
+        cout << endl << "=================iteration " << iter_count
+            << "=================" << endl;
 
         int majority_class = 0;
         int majority_class_count = 0;
+
         for (int i = 0; i < CLASS_COUNT; i++) {
             if (majority_class_count < class_count_arr[i]) {
                 majority_class_count = class_count_arr[i];
@@ -1203,7 +1214,7 @@ int main(int argc, char *argv[]) {
         double kappa = get_kappa(h_confusion_matrix, CLASS_COUNT, accuracy,
                 INSTANCE_COUNT_PER_TREE);
 
-        cout << "===============>" << endl
+        cout << "\n=================statistics" << endl
             << "accuracy: " << accuracy << endl
             << "mean accuracy: " << mean_accuracy << endl
             << "kappa: " << kappa << endl;
