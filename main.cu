@@ -680,8 +680,10 @@ int main(int argc, char *argv[]) {
 
     int TREE_COUNT = 1;
     int INSTANCE_COUNT_PER_TREE = 1000;
+
     string data_path = "data/covtype";
     string data_file_name = "covtype_binary_attributes.csv";
+
     bool ENABLE_BACKGROUND_TREES = false;
 
     int opt;
@@ -729,20 +731,20 @@ int main(int argc, char *argv[]) {
 
 
     // read data file
-    string csv_path = data_path + "/" + data_file_name;
-    ifstream data_file(csv_path);
+    string attribute_file_path = data_path + "/attributes.txt";
+    ifstream attribute_file(attribute_file_path);
 
     cout << endl;
-    if (data_file) {
-        cout << "Reading data file from " << csv_path << " succeeded." << endl;
+    if (attribute_file) {
+        cout << "Reading data file from " << attribute_file_path << " succeeded." << endl;
     } else {
-        cout << "Error reading file from " << csv_path << endl;
+        cout << "Error reading file from " << attribute_file_path << endl;
         return 1;
     }
 
     // prepare attributes
     string line;
-    getline(data_file, line);
+    getline(attribute_file, line);
 
     const int ATTRIBUTE_COUNT_TOTAL = split(line, ",").size() - 1;
     const int ATTRIBUTE_COUNT_PER_TREE = (int) sqrt(ATTRIBUTE_COUNT_TOTAL);
@@ -1057,10 +1059,15 @@ int main(int argc, char *argv[]) {
     if (!allocate_memory_on_device(&d_is_tree_active, "d_is_tree_active", TREE_COUNT)) {
         return 1;
     }
-    gpuErrchk(cudaMemset(d_is_tree_active, true, (TREE_COUNT >> 1) * sizeof(bool)));
 
-    bool *d_is_tree_active_bg = d_is_tree_active + (TREE_COUNT >> 1);
-    gpuErrchk(cudaMemset(d_is_tree_active_bg, false, (TREE_COUNT >> 1) * sizeof(bool)));
+    if (ENABLE_BACKGROUND_TREES) {
+        gpuErrchk(cudaMemset(d_is_tree_active, true, (TREE_COUNT >> 1) * sizeof(bool)));
+    } else {
+        gpuErrchk(cudaMemset(d_is_tree_active, true, TREE_COUNT * sizeof(bool)));
+    }
+
+    // bool *d_is_tree_active_bg = d_is_tree_active + (TREE_COUNT >> 1);
+    // gpuErrchk(cudaMemset(d_is_tree_active_bg, false, (TREE_COUNT >> 1) * sizeof(bool)));
 
     int confusion_matrix_size = CLASS_COUNT * CLASS_COUNT;
     int *h_confusion_matrix = (int*) malloc(confusion_matrix_size * sizeof(int));
@@ -1078,6 +1085,18 @@ int main(int argc, char *argv[]) {
 
     int *d_data;
     if (!allocate_memory_on_device(&d_data, "data", data_len)) {
+        return 1;
+    }
+
+    // read data file
+    string csv_path = data_path + "/" + data_file_name;
+    ifstream data_file(csv_path);
+
+    cout << endl;
+    if (data_file) {
+        cout << "Reading data file from " << csv_path << " succeeded." << endl;
+    } else {
+        cout << "Error reading file from " << csv_path << endl;
         return 1;
     }
 
