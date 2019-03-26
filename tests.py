@@ -10,6 +10,10 @@ from scipy.stats import friedmanchisquare
 base_dir = os.path.expanduser('~')
 gpu_path = base_dir + "/random-forest-gpu/"
 moa_path = base_dir + "/moa-release-2018.6.0/"
+stats_output_path = f"{gpu_path}/statistics/"
+
+if not os.path.exists(stats_output_path):
+    os.makedirs(stats_output_path)
 
 data_sets = ["stagger_gradual_drift"]
 
@@ -18,13 +22,13 @@ for data_set in data_sets:
     gpu_output = f"{gpu_path}/{data_path}/result_gpu.csv"
     moa_output = f"{moa_path}/bin/result_moa.csv"
 
-    final_statistics_path = f"{gpu_path}/statistics/{data_set}_stats.csv"
+    cur_stats_output_path = f"{stats_output_path}/{data_set}_stats.csv"
 
-    with open(final_statistics_path, "w") as out:
+    with open(cur_stats_output_path, "w") as out:
         out.write("#seed,gpu_accuracy_mean,gpu_accuracy_stdev,gpu_kappa_mean,gpu_kappa_stdev,"
                   "moa_accuracy_mean,moa_accuracy_stdev,moa_kappa_mean,moa_kappa_stdev\n")
 
-    with open(final_statistics_path, "a") as out:
+    with open(cur_stats_output_path, "a") as out:
         for seed in range(0, 100):
             data_file_name = "{:02d}.csv".format(seed)
             print(f"==========================seed {seed}==========================")
@@ -50,13 +54,13 @@ for data_set in data_sets:
             gpu_kappa = df["kappa"].values.tolist()
 
             df = pd.read_csv(moa_output)
-            moa_accuracy = df["classifications correct (percent)"]#.values.tolist()
-            moa_kappa = df["Kappa Statistic (percent)"]#.values.tolist()
+            moa_accuracy = df["classifications correct (percent)"]
+            moa_kappa = df["Kappa Statistic (percent)"]
 
             gpu_accuracy_mean = np.mean(gpu_accuracy)
             gpu_accuracy_stdev = np.std(gpu_accuracy)
-            gpu_kappa_mean = np.mean(gpu_kappa);
-            gpu_kappa_stdev = np.std(gpu_kappa);
+            gpu_kappa_mean = np.mean(gpu_kappa)
+            gpu_kappa_stdev = np.std(gpu_kappa)
 
             moa_accuracy_mean = np.mean(moa_accuracy)
             moa_accuracy_stdev = np.std(moa_accuracy)
@@ -69,14 +73,14 @@ for data_set in data_sets:
                       f"{moa_accuracy_mean},{moa_accuracy_stdev},"
                       f"{moa_kappa_mean},{moa_kappa_stdev}\n")
 
-    df = pd.read_csv(final_statistics_path)
+    df = pd.read_csv(cur_stats_output_path)
     gpu_accuracy_mean = df["gpu_accuracy_mean"]
     moa_accuracy_mean = df["moa_accuracy_mean"]
 
     # stat, p = friedmanchisquare(gpu_accuracy_mean, moa_accuracy_mean)
     stat, p = wilcoxon(gpu_accuracy_mean, moa_accuracy_mean)
 
-    with open(final_statistics_path, "w") as out:
+    with open(cur_stats_output_path, "w") as out:
         alpha = 0.05
         if p > alpha:
             out.write("Same distirbutions")
