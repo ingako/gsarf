@@ -68,7 +68,6 @@ double get_kappa(int *confusion_matrix, int class_count,  double accuracy, int s
         }
 
         pc += (row_sum / sample_count) * (col_sum / sample_count);
-
     }
 
     if (pc == 1) {
@@ -721,7 +720,7 @@ int main(int argc, char *argv[]) {
         << "INSTANCE_COUNT_PER_TREE = " << INSTANCE_COUNT_PER_TREE << endl;
 
 
-    string output_path = data_path + "/result_gpu.txt";
+    string output_path = data_path + "/result_gpu.csv";
     ofstream output_file;
     output_file.open(output_path);
 
@@ -1127,7 +1126,8 @@ int main(int argc, char *argv[]) {
     double mean_accuracy = 0.0;
     double mean_kappa = 0.0;
 
-    output_file << "#iteration,accuracy,mean_accuracy,kappa,mean_kappa" << endl;
+    // output_file << "#iteration,accuracy,mean_accuracy,kappa,mean_kappa" << endl;
+    output_file << "#iteration,accuracy,kappa" << endl;
 
     bool eof = false;
 
@@ -1248,9 +1248,9 @@ int main(int argc, char *argv[]) {
 
         output_file << iter_count * INSTANCE_COUNT_PER_TREE
             << "," << accuracy * 100
-            << "," << mean_accuracy * 100
-            << "," << kappa * 100
-            << "," << mean_kappa * 100 << endl;
+            // << "," << mean_accuracy * 100
+            << "," << kappa * 100 << endl;
+            // << "," << mean_kappa * 100 << endl;
 
 
         // for drift detection
