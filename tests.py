@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import math
 import pandas as pd
 import numpy as np
 from scipy.stats import wilcoxon
@@ -24,6 +25,11 @@ for data_set in data_sets:
 
     cur_stats_output_path = f"{stats_output_path}/{data_set}_stats.csv"
 
+    num_of_attributes = 0
+    with open(f"{data_path}/attributes.txt", "r") as f:
+        num_of_attributes = len(f.readline().split(','))
+        num_of_attributes = math.floor(math.log2(num_of_attributes))
+
     with open(cur_stats_output_path, "w") as out:
         out.write("#seed,gpu_accuracy_mean,gpu_accuracy_stdev,gpu_kappa_mean,gpu_kappa_stdev,"
                   "moa_accuracy_mean,moa_accuracy_stdev,moa_kappa_mean,moa_kappa_stdev\n")
@@ -45,7 +51,8 @@ for data_set in data_sets:
             with open(moa_output, "w") as moa_out:
                 command = ["bash",
                            f"{moa_path}/bin/{data_set}.sh",
-                           f"{data_path}/{data_file_name}"]
+                           f"{data_path}/{data_file_name}",
+                           str(num_of_attributes)]
                 print(" ".join(command))
                 moa_process = subprocess.call(command, stdout=moa_out)
 
@@ -72,6 +79,7 @@ for data_set in data_sets:
                       f"{gpu_kappa_mean},{gpu_kappa_stdev},"
                       f"{moa_accuracy_mean},{moa_accuracy_stdev},"
                       f"{moa_kappa_mean},{moa_kappa_stdev}\n")
+            out.flush()
 
     df = pd.read_csv(cur_stats_output_path)
     gpu_accuracy_mean = df["gpu_accuracy_mean"]
@@ -80,7 +88,7 @@ for data_set in data_sets:
     # stat, p = friedmanchisquare(gpu_accuracy_mean, moa_accuracy_mean)
     stat, p = wilcoxon(gpu_accuracy_mean, moa_accuracy_mean)
 
-    with open(cur_stats_output_path, "w") as out:
+    with open(cur_stats_output_path, "a") as out:
         alpha = 0.05
         if p > alpha:
             out.write("Same distirbutions")
