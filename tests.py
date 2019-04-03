@@ -9,8 +9,8 @@ from scipy.stats import wilcoxon
 from scipy.stats import friedmanchisquare
 
 base_dir = os.path.expanduser('~')
-gpu_path = base_dir + "/random-forest-gpu/"
-moa_path = base_dir + "/moa-release-2018.6.0/"
+gpu_path = f"{base_dir}/random-forest-gpu/"
+moa_path = f"{base_dir}/moa-release-2018.6.0/"
 stats_output_path = f"{gpu_path}/statistics/"
 
 if not os.path.exists(stats_output_path):
@@ -35,9 +35,11 @@ for data_set in data_sets:
                   "moa_accuracy_mean,moa_accuracy_stdev,moa_kappa_mean,moa_kappa_stdev\n")
 
     with open(cur_stats_output_path, "a") as out:
-        for seed in range(0, 100):
-            data_file_name = "{:02d}.csv".format(seed)
-            print(f"==========================seed {seed}==========================")
+        for data_file_name in sorted(os.listdir(data_path)):
+            if not data_file_name.endswith(".csv"):
+                continue
+
+            print(f"======================={data_file_name}=======================")
 
             # run gpu random forest
             print("Running gpu random forest...")

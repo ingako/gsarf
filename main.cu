@@ -291,7 +291,6 @@ __global__ void tree_traversal(
 
     // prepare weights to be used in counter_increase kernel
     cur_weights[instance_idx] = poisson(1.0, state + thread_pos);
-    // printf("==================================cur weight: %i\n", cur_weights[instance_idx]);
 
     __syncthreads();
 
@@ -438,10 +437,18 @@ __global__ void compute_information_gain(
         for (int i = 0; i < class_count; i++) {
             int a_ijk = cur_leaf_counter[threadIdx.x + (2 + i) * leaf_counter_row_len];
 
-            // float param = a_ijk / a_ij; // TODO float division by zero returns INF
+            // TODO
+            // division by zero returns -inf
+            // float param = a_ijk / a_ij;
             // asm("max.f32 %0, %1, %2;" : "=f"(param) : "f"(param), "f"((float) 0.0));
-            // sum += param * log(param);
 
+            // log2(0) returns -nan
+            // float log_param = log2f(param);
+            // asm("max.f32 %0, %1, %2;" : "=f"(log_param) : "f"(log_param), "f"((float) 0.0));
+
+            // sum += (param * log_param);
+
+            // --
             float param = 0.0;
             if (a_ij > 0) {
                 // if a_ijk > 0, then a_ij > 0
@@ -457,7 +464,6 @@ __global__ void compute_information_gain(
         }
 
         cur_info_gain_vals[threadIdx.x] = -sum;
-        // printf("cur_info_gain_vals:%f\n", cur_info_gain_vals[threadIdx.x]);
     }
 
     __syncthreads();
@@ -477,9 +483,9 @@ __global__ void compute_information_gain(
         cur_info_gain_vals[i_idx] = i_00 + i_01;
     }
 
-    if (threadIdx.x != 0) {
-        return;
-    }
+    // if (threadIdx.x != 0) {
+    //     return;
+    // }
 
     // TODO
     // int majority_class_code = 0;
@@ -508,11 +514,11 @@ __global__ void compute_information_gain(
 // n: the number of examples collected at the node
 __device__ float compute_hoeffding_bound(float range, float confidence, int n) {
     if (n == 0 || confidence == 0) {
-	return FLT_MAX;
+        return FLT_MAX;
     }
 
     float result = sqrt(((range * range) * log(1.0 / confidence)) / (2.0 * n));
-    // printf("=========> range: %f, confidence: %f, n: %f, result: %f\n", range, confidence, n, result);
+
     return result;
 }
 
@@ -1448,7 +1454,9 @@ int main(int argc, char *argv[]) {
         for (int tree_idx = 0; tree_idx < TREE_COUNT; tree_idx++) {
             log_file << "tree " << tree_idx << endl;
 
-            log_file << "h_cur_leaf_count_per_tree is: " << h_cur_leaf_count_per_tree[tree_idx] << endl;
+            log_file << "h_cur_leaf_count_per_tree is: "
+                << h_cur_leaf_count_per_tree[tree_idx] << endl;
+
             int *cur_tree_leaf_counter = h_leaf_counters + tree_idx * LEAF_COUNT_PER_TREE
                 * leaf_counter_size;
 
