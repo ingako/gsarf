@@ -80,19 +80,16 @@ double get_kappa(int *confusion_matrix, int class_count,  double accuracy, int s
 
 
 void select_k_attributes(int *reservoir, int n, int k) {
-    for (int i = 0; i < k; i++) {
-	    reservoir[i] = rand() % n;
+    int i;
+    for (i = 0; i < k; i++) {
+        reservoir[i] = i;
     }
-    // int i;
-    // for (i = 0; i < k; i++) {
-    //     reservoir[i] = i;
-    // }
 
-    // for (i = k; i < n; i++) {
-    //     int j = rand() % (i + 1);
+    for (i = k; i < n; i++) {
+        int j = rand() % (i + 1);
 
-    //     if (j < k) reservoir[j] = i;
-    // }
+        if (j < k) reservoir[j] = i;
+    }
 }
 
 vector<string> split_attributes(string line, char delim) {
@@ -627,6 +624,11 @@ __global__ void node_split(int *decision_trees,
         int left_leaf_pos = get_left(cur_leaf_pos_in_tree);
         int right_leaf_pos = get_right(cur_leaf_pos_in_tree);
 
+        // TODO hack
+        if (left_leaf_pos > 14 || right_leaf_pos > 14) {
+            continue;
+        }
+
         cur_decision_tree[cur_leaf_pos_in_tree] = attribute_id;
         // cur_decision_tree[cur_leaf_pos_in_tree] = cur_attribute_val_arr[attribute_id];
 
@@ -703,6 +705,7 @@ int main(int argc, char *argv[]) {
 
     int TREE_COUNT = 1;
     int INSTANCE_COUNT_PER_TREE = 200;
+    int SAMPLE_FREQUENCY = 1000;
 
     string data_path = "data/covtype";
     string data_file_name = "covtype_binary_attributes.csv";
@@ -710,7 +713,7 @@ int main(int argc, char *argv[]) {
     bool ENABLE_BACKGROUND_TREES = false;
 
     int opt;
-    while ((opt = getopt(argc, argv, "t:i:p:n:br")) != -1) {
+    while ((opt = getopt(argc, argv, "t:i:p:n:s:br")) != -1) {
         switch (opt) {
             case 't':
                 TREE_COUNT = atoi(optarg);
@@ -723,6 +726,9 @@ int main(int argc, char *argv[]) {
                 break;
             case 'n':
                 data_file_name = optarg;
+                break;
+            case 's':
+                SAMPLE_FREQUENCY = atoi(optarg);
                 break;
             case 'b':
                 ENABLE_BACKGROUND_TREES = true;
@@ -817,7 +823,7 @@ int main(int argc, char *argv[]) {
     log_file << "CLASS_COUNT = " << CLASS_COUNT << endl;
 
     // hoeffding bound parameters
-    float n_min = 1000;
+    float n_min = 200;
     float delta = 0.05; // pow((float) 10.0, -7);
     float r = log2(CLASS_COUNT); // range of merit = log2(num_of_classes)
 
@@ -1134,8 +1140,10 @@ int main(int argc, char *argv[]) {
     int leaf_counter_row_len = ATTRIBUTE_COUNT_TOTAL * 2;
     int iter_count = 1;
 
-    double mean_accuracy = 0.0;
-    double mean_kappa = 0.0;
+    int sample_count_iter = 0;
+    int sample_count_total = 0;
+    double window_accuracy = 0.0;
+    double window_kappa = 0.0;
 
     // output_file << "#iteration,accuracy,mean_accuracy,kappa,mean_kappa" << endl;
     output_file << "#iteration,accuracy,kappa" << endl;
@@ -1247,26 +1255,32 @@ int main(int argc, char *argv[]) {
 
         log_file << "h_correct_counter: " << h_correct_counter << endl;
         double accuracy = (double) h_correct_counter / INSTANCE_COUNT_PER_TREE;
-        mean_accuracy = (iter_count * mean_accuracy + accuracy) / (iter_count + 1);
+        window_accuracy = (sample_count_iter * window_accuracy + accuracy)
+            / (sample_count_iter + 1);
 
         gpuErrchk(cudaMemcpy(h_confusion_matrix, d_confusion_matrix,
                     confusion_matrix_size * sizeof(int), cudaMemcpyDeviceToHost));
 
         double kappa = get_kappa(h_confusion_matrix, CLASS_COUNT, accuracy,
                 INSTANCE_COUNT_PER_TREE);
-        mean_kappa = (iter_count * mean_kappa + kappa) / (iter_count + 1);
+        window_kappa = (sample_count_iter * window_kappa + kappa) / (sample_count_iter + 1);
 
         log_file << "\n=================statistics" << endl
             << "accuracy: " << accuracy << endl
-            << "mean accuracy: " << mean_accuracy << endl
-            << "kappa: " << kappa << endl
-            << "mean kappa: " << mean_kappa << endl;
+            << "kappa: " << kappa << endl;
 
-        output_file << iter_count * INSTANCE_COUNT_PER_TREE
-            << "," << accuracy * 100
-            // << "," << mean_accuracy * 100
-            << "," << kappa * 100 << endl;
-            // << "," << mean_kappa * 100 << endl;
+        sample_count_iter++;;
+        sample_count_total = sample_count_iter * INSTANCE_COUNT_PER_TREE; // avoid expensive mod
+
+        if (sample_count_total >= SAMPLE_FREQUENCY) {
+            output_file << iter_count * INSTANCE_COUNT_PER_TREE
+                << "," << window_accuracy * 100
+                << "," << window_kappa * 100 << endl;
+
+            int sample_count = 0;
+            double window_accuracy = 0.0;
+            double window_kappa = 0.0;
+        }
 
 
 #if DEBUG
