@@ -1254,6 +1254,7 @@ int main(int argc, char *argv[]) {
                     cudaMemcpyDeviceToHost));
 
         log_file << "h_correct_counter: " << h_correct_counter << endl;
+
         double accuracy = (double) h_correct_counter / INSTANCE_COUNT_PER_TREE;
         window_accuracy = (sample_count_iter * window_accuracy + accuracy)
             / (sample_count_iter + 1);
@@ -1277,9 +1278,9 @@ int main(int argc, char *argv[]) {
                 << "," << window_accuracy * 100
                 << "," << window_kappa * 100 << endl;
 
-            int sample_count = 0;
-            double window_accuracy = 0.0;
-            double window_kappa = 0.0;
+            sample_count_iter = 0;
+            window_accuracy = 0.0;
+            window_kappa = 0.0;
         }
 
 
