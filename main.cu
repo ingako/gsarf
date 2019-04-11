@@ -80,16 +80,20 @@ double get_kappa(int *confusion_matrix, int class_count,  double accuracy, int s
 
 
 void select_k_attributes(int *reservoir, int n, int k) {
-    int i;
-    for (i = 0; i < k; i++) {
-        reservoir[i] = i;
+    for (int i = 0; i < k; i++) {
+        reservoir[i] = rand() % n;
     }
 
-    for (i = k; i < n; i++) {
-        int j = rand() % (i + 1);
+    // int i;
+    // for (i = 0; i < k; i++) {
+    //     reservoir[i] = i;
+    // }
 
-        if (j < k) reservoir[j] = i;
-    }
+    // for (i = k; i < n; i++) {
+    //     int j = rand() % (i + 1);
+
+    //     if (j < k) reservoir[j] = i;
+    // }
 }
 
 vector<string> split_attributes(string line, char delim) {
@@ -270,12 +274,12 @@ __global__ void tree_traversal(
         predicted_class = majority_class;
     }
 
-    if (class_count_arr[predicted_class] == 0) {
-        predicted_class = majority_class;
-    }
-
     if (predicted_class != actual_class) {
         atomicAdd(&tree_error_count[tree_idx], 1);
+    }
+
+    if (class_count_arr[predicted_class] == 0) {
+        predicted_class = majority_class;
     }
 
     atomicAdd(&cur_forest_vote[predicted_class], 1);
@@ -624,8 +628,8 @@ __global__ void node_split(int *decision_trees,
         int left_leaf_pos = get_left(cur_leaf_pos_in_tree);
         int right_leaf_pos = get_right(cur_leaf_pos_in_tree);
 
-        // TODO hack
-        if (left_leaf_pos > 14 || right_leaf_pos > 14) {
+        if (left_leaf_pos >= max_node_count_per_tree
+                || right_leaf_pos >= max_node_count_per_tree) {
             continue;
         }
 
@@ -704,6 +708,7 @@ __global__ void node_split(int *decision_trees,
 int main(int argc, char *argv[]) {
 
     int TREE_COUNT = 1;
+    int TREE_DEPTH_PARAM = -1;
     int INSTANCE_COUNT_PER_TREE = 200;
     int SAMPLE_FREQUENCY = 1000;
 
@@ -713,7 +718,7 @@ int main(int argc, char *argv[]) {
     bool ENABLE_BACKGROUND_TREES = false;
 
     int opt;
-    while ((opt = getopt(argc, argv, "t:i:p:n:s:br")) != -1) {
+    while ((opt = getopt(argc, argv, "t:i:p:n:s:d:br")) != -1) {
         switch (opt) {
             case 't':
                 TREE_COUNT = atoi(optarg);
@@ -732,6 +737,10 @@ int main(int argc, char *argv[]) {
                 break;
             case 'b':
                 ENABLE_BACKGROUND_TREES = true;
+                break;
+            case 'd':
+                TREE_DEPTH_PARAM = atoi(optarg);
+                break;
             case 'r':
                 // Use a different seed value for each run
                 srand(time(NULL));
@@ -782,11 +791,15 @@ int main(int argc, char *argv[]) {
     const int ATTRIBUTE_COUNT_TOTAL = split(line, ",").size() - 1;
     const int ATTRIBUTE_COUNT_PER_TREE = (int) sqrt(ATTRIBUTE_COUNT_TOTAL);
 
+    const int TREE_DEPTH =
+        TREE_DEPTH_PARAM == -1 ? (int) sqrt(ATTRIBUTE_COUNT_TOTAL) + 1 : TREE_DEPTH_PARAM;
+
     log_file << "ATTRIBUTE_COUNT_TOTAL = " << ATTRIBUTE_COUNT_TOTAL << endl;
     log_file << "ATTRIBUTE_COUNT_PER_TREE = " << ATTRIBUTE_COUNT_PER_TREE << endl;
+    log_file << "TREE_DEPTH = " << TREE_DEPTH << endl;
 
-    const unsigned int NODE_COUNT_PER_TREE = (1 << (ATTRIBUTE_COUNT_TOTAL + 1)) - 1;
-    const unsigned int LEAF_COUNT_PER_TREE = (1 << ATTRIBUTE_COUNT_TOTAL);
+    const unsigned int NODE_COUNT_PER_TREE = (1 << TREE_DEPTH) - 1;
+    const unsigned int LEAF_COUNT_PER_TREE = (1 << (TREE_DEPTH - 1));
 
     log_file << "NODE_COUNT_PER_TREE = " << NODE_COUNT_PER_TREE << endl;
     log_file << "LEAF_COUNT_PER_TREE = " << LEAF_COUNT_PER_TREE << endl;
@@ -851,6 +864,7 @@ int main(int argc, char *argv[]) {
 
 
 #if DEBUG
+
     allocated = malloc(LEAF_COUNT_PER_TREE * TREE_COUNT * sizeof(int));
     if (allocated == NULL) {
         log_file << "host error: memory allocation for leaf_class failed" << endl;
@@ -864,6 +878,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     int *h_leaf_back = (int*) allocated; // reverse pointer to map a leaf id to an offset in the tree array
+
 #endif
 
     log_file << "Init: set root as leaf for each tree in the forest..." << endl;
@@ -1521,8 +1536,6 @@ int main(int argc, char *argv[]) {
                     leaf_counter_size,
                     leaf_counter_row_len,
                     CLASS_COUNT);
-
-            // drift_detectors = new ADWIN[TREE_COUNT];
 
             cudaDeviceSynchronize();
         }
