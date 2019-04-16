@@ -558,7 +558,8 @@ __global__ void compute_node_split_decisions(
     node_split_decisions[thread_pos] = decision;
 }
 
-__global__ void node_split(int *decision_trees,
+__global__ void node_split(
+        int *decision_trees,
         int *node_split_decisions,
         int *leaf_counters,
         int *leaf_class,
@@ -711,6 +712,7 @@ int main(int argc, char *argv[]) {
     int TREE_DEPTH_PARAM = -1;
     int INSTANCE_COUNT_PER_TREE = 200;
     int SAMPLE_FREQUENCY = 1000;
+    float n_min = 50; // hoeffding bound parameter, grace_period
 
     string data_path = "data/covtype";
     string data_file_name = "covtype_binary_attributes.csv";
@@ -718,7 +720,7 @@ int main(int argc, char *argv[]) {
     bool ENABLE_BACKGROUND_TREES = false;
 
     int opt;
-    while ((opt = getopt(argc, argv, "t:i:p:n:s:d:br")) != -1) {
+    while ((opt = getopt(argc, argv, "t:i:p:n:s:d:g:br")) != -1) {
         switch (opt) {
             case 't':
                 TREE_COUNT = atoi(optarg);
@@ -740,6 +742,9 @@ int main(int argc, char *argv[]) {
                 break;
             case 'd':
                 TREE_DEPTH_PARAM = atoi(optarg);
+                break;
+            case 'g':
+                n_min = atoi(optarg);
                 break;
             case 'r':
                 // Use a different seed value for each run
@@ -836,7 +841,6 @@ int main(int argc, char *argv[]) {
     log_file << "CLASS_COUNT = " << CLASS_COUNT << endl;
 
     // hoeffding bound parameters
-    float n_min = 200;
     float delta = 0.05; // pow((float) 10.0, -7);
     float r = log2(CLASS_COUNT); // range of merit = log2(num_of_classes)
 
