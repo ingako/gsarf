@@ -332,6 +332,7 @@ __global__ void tree_traversal(
 
 __global__ void counter_increase(
         int *leaf_counters,
+        int *tree_status,
         int *reached_leaf_ids,
         int *data,
         int *weights,
@@ -354,6 +355,11 @@ __global__ void counter_increase(
     // Row 2 and onwards stores partial counters n_ijk for each class k.
 
     int tree_idx = blockIdx.x;
+    int cur_tree_status = tree_status[tree_idx];
+    if (cur_tree_status == 0 || cur_tree_status == 2) {
+        return;
+    }
+
     int instance_idx = blockIdx.y;
     int instance_count_per_tree = gridDim.y;
 
@@ -391,6 +397,7 @@ __global__ void counter_increase(
 
 __global__ void compute_information_gain(
         int *leaf_counters,
+        int *tree_status,
         int *leaf_class,
         float *info_gain_vals,
         int *attribute_val_arr,
@@ -413,20 +420,26 @@ __global__ void compute_information_gain(
         return;
     }
 
-    int tree_id = blockIdx.x;
+    int tree_idx = blockIdx.x;
+
+    int cur_tree_status = tree_status[tree_idx];
+    if (cur_tree_status == 0 || cur_tree_status == 2) {
+        return;
+    }
+
     int leaf_id = blockIdx.y;
 
     int leaf_count_per_tree = gridDim.y;
     int leaf_counter_row_len = attribute_count_total * 2;
 
-    int cur_tree_counters_start_pos = tree_id * leaf_count_per_tree * leaf_counter_size;
+    int cur_tree_counters_start_pos = tree_idx * leaf_count_per_tree * leaf_counter_size;
     int cur_leaf_counter_start_pos = cur_tree_counters_start_pos + leaf_id * leaf_counter_size;
     int *cur_leaf_counter = leaf_counters + cur_leaf_counter_start_pos;
 
-    int *cur_attribute_val_arr = attribute_val_arr + tree_id * attribute_count_per_tree;
+    int *cur_attribute_val_arr = attribute_val_arr + tree_idx * attribute_count_per_tree;
 
     int info_gain_per_len = attribute_count_per_tree * 2;
-    int cur_tree_info_gain_start_pos = tree_id * leaf_count_per_tree * info_gain_per_len;
+    int cur_tree_info_gain_start_pos = tree_idx * leaf_count_per_tree * info_gain_per_len;
     int cur_leaf_info_gain_start_pos = cur_tree_info_gain_start_pos + leaf_id *
         info_gain_per_len;
     float *cur_info_gain_vals = info_gain_vals + cur_leaf_info_gain_start_pos;
@@ -499,7 +512,7 @@ __global__ void compute_information_gain(
         }
     }
 
-    int *cur_leaf_class = leaf_class + tree_id * leaf_count_per_tree;
+    int *cur_leaf_class = leaf_class + tree_idx * leaf_count_per_tree;
     cur_leaf_class[leaf_id] = majority_class_code;
 }
 
@@ -518,6 +531,7 @@ __device__ float compute_hoeffding_bound(float range, float confidence, float n)
 
 __global__ void compute_node_split_decisions(
         float *info_gain_vals,
+        int *tree_status,
         int *attribute_val_arr,
         int *attribute_idx_arr,
         int *node_split_decisions,
@@ -537,6 +551,11 @@ __global__ void compute_node_split_decisions(
     }
 
     int tree_idx = blockIdx.x;
+    int cur_tree_status = tree_status[tree_idx];
+    if (cur_tree_status == 0 || cur_tree_status == 2) {
+        return;
+    }
+
     int leaf_idx = threadIdx.x;
     int leaf_count_per_tree = blockDim.x;
 
@@ -1023,6 +1042,7 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    // TODO same attribute_idx_arr for foreground and its background tree
 
     // allocate memory for node_split_decisions
     // unsigned int *h_node_split_decisions;
@@ -1102,14 +1122,15 @@ int main(int argc, char *argv[]) {
 
     if (ENABLE_BACKGROUND_TREES) {
         for (int i = 0; i < TREE_COUNT; i++) {
-            warning_detectors[i] = ADWIN((double) 0.0001);
+            warning_detectors[i] = ADWIN((double) 0.001);
             drift_detectors[i] = ADWIN((double) 0.00001);
         }
     }
 
-    int* h_tree_error_count = (int*) calloc(TREE_COUNT, sizeof(int));
+    int tree_error_count_len = ENABLE_BACKGROUND_TREES ? TREE_COUNT >> 1 : TREE_COUNT;
+    int* h_tree_error_count = (int*) calloc(tree_error_count_len, sizeof(int));
     int* d_tree_error_count;
-    if (!allocate_memory_on_device(&d_tree_error_count, "tree_error_count", TREE_COUNT)) {
+    if (!allocate_memory_on_device(&d_tree_error_count, "tree_error_count", tree_error_count_len)) {
         return 1;
     }
 
@@ -1150,7 +1171,7 @@ int main(int argc, char *argv[]) {
     // TODO
     // 0: inactive, 1: active, 2: ungrown bg_tree, 3: growing bg_tree
     int h_tree_active_status[TREE_COUNT];
-    int *d_tree_active_status = 0;
+    int *d_tree_active_status;
     if (!allocate_memory_on_device(&d_tree_active_status, "d_tree_active_status", TREE_COUNT)) {
         return 1;
     }
@@ -1167,9 +1188,13 @@ int main(int argc, char *argv[]) {
         for (int i = 0; i < TREE_COUNT; i++) {
             h_tree_active_status[i] = 1;
         }
-        // gpuErrchk(cudaMemset(d_tree_active_status, 1, TREE_COUNT * sizeof(int)));
-
     }
+
+    cout << "tree active status: ";
+    for (int i = 0; i < TREE_COUNT; i++) {
+        cout << h_tree_active_status[i] << " ";
+    }
+    cout << endl;;
 
     gpuErrchk(cudaMemcpy(d_tree_active_status, h_tree_active_status,
                 TREE_COUNT * sizeof(int), cudaMemcpyHostToDevice));
@@ -1297,7 +1322,7 @@ int main(int argc, char *argv[]) {
         thread_count = INSTANCE_COUNT_PER_TREE;
 
         gpuErrchk(cudaMemset(d_correct_counter, 0, sizeof(int)));
-        gpuErrchk(cudaMemset(d_tree_error_count, 0, TREE_COUNT * sizeof(int)));
+        gpuErrchk(cudaMemset(d_tree_error_count, 0, tree_error_count_len * sizeof(int)));
         gpuErrchk(cudaMemset(d_confusion_matrix, 0, confusion_matrix_size * sizeof(int)));
 
         gpuErrchk(cudaMemset(d_forest_vote, 0, forest_vote_len * sizeof(int)));
@@ -1410,6 +1435,7 @@ int main(int argc, char *argv[]) {
         counter_increase
             <<<dim3(TREE_COUNT, INSTANCE_COUNT_PER_TREE), ATTRIBUTE_COUNT_TOTAL>>>(
                     d_leaf_counters,
+                    d_tree_active_status,
                     d_reached_leaf_ids,
                     d_data,
                     d_weights,
@@ -1458,7 +1484,14 @@ int main(int argc, char *argv[]) {
 
         // select k random attributes for each tree
         // output_file << "\nAttributes selected per tree: " << endl;
+
         for (int tree_idx = 0; tree_idx < TREE_COUNT; tree_idx++) {
+
+            // select random attributes for foreground trees only
+            if (h_tree_active_status[tree_idx] != 1) {
+                continue;
+            }
+
             // output_file << "tree " << tree_idx << endl;
 
             int *cur_attribute_val_arr = h_attribute_val_arr + tree_idx * ATTRIBUTE_COUNT_PER_TREE;
@@ -1483,6 +1516,7 @@ int main(int argc, char *argv[]) {
 
         compute_information_gain<<<grid, thread_count>>>(
                 d_leaf_counters,
+                d_tree_active_status,
                 d_leaf_class,
                 d_info_gain_vals,
                 d_attribute_val_arr,
@@ -1503,6 +1537,7 @@ int main(int argc, char *argv[]) {
 
         compute_node_split_decisions<<<TREE_COUNT, LEAF_COUNT_PER_TREE>>>(
                 d_info_gain_vals,
+                d_tree_active_status,
                 d_attribute_val_arr,
                 d_attribute_idx_arr,
                 d_node_split_decisions,
@@ -1567,48 +1602,46 @@ int main(int argc, char *argv[]) {
 
         // for drift detection
         gpuErrchk(cudaMemcpy((void *) h_tree_error_count, (void *) d_tree_error_count,
-                    TREE_COUNT * sizeof(int), cudaMemcpyDeviceToHost));
+                    tree_error_count_len * sizeof(int), cudaMemcpyDeviceToHost));
 
         int warning_tree_count = 0;
         int drift_tree_count = 0;
         int h_drift_tree_idx_arr[TREE_COUNT];
 
+        // warning/drift detection only on foreground trees
         // if accuracy decreases, reset the tree
-        for (int tree_idx = 0; tree_idx < TREE_COUNT; tree_idx++) {
+
+        int detection_range = TREE_COUNT;
+        if (ENABLE_BACKGROUND_TREES) {
+            detection_range = (TREE_COUNT >> 1);
+        }
+
+        for (int tree_idx = 0; tree_idx < detection_range; tree_idx++) {
 
             ADWIN *warning_detector = &warning_detectors[tree_idx];
-            if (ENABLE_BACKGROUND_TREES && tree_idx < (TREE_COUNT >> 1)) {
-                double old_error = warning_detector->getEstimation();
-                bool error_change =
-                    warning_detector->setInput(h_tree_error_count[tree_idx]);
+            double old_error = warning_detector->getEstimation();
+            bool error_change = warning_detector->setInput(h_tree_error_count[tree_idx]);
 
-                if (error_change && old_error > warning_detector->getEstimation()) {
-                    error_change = false;
-                }
-
-                if (error_change) {
-                    warning_tree_count++;
-                    warning_detector->resetChange();
-
-                    // grow background tree
-                    int bg_tree_pos = tree_idx + (TREE_COUNT >> 1);
-                    if (h_tree_active_status[bg_tree_pos] == 2) {
-                        // start growing if never grown
-                        h_tree_active_status[bg_tree_pos] = 3;
-                    }
-
-                }
+            if (error_change && old_error > warning_detector->getEstimation()) {
+                error_change = false;
             }
 
-            if (h_tree_active_status[tree_idx] != 1) {
-               continue;
+            if (error_change) {
+                warning_tree_count++;
+                // warning_detector->resetChange();
+
+                // grow background tree
+                int bg_tree_pos = tree_idx + (TREE_COUNT >> 1);
+                if (h_tree_active_status[bg_tree_pos] == 2) {
+                    // start growing if never grown
+                    h_tree_active_status[bg_tree_pos] = 3;
+                }
+
             }
 
             ADWIN *drift_detector = &drift_detectors[tree_idx];
-            double old_error = drift_detector->getEstimation();
-
-            bool error_change =
-                drift_detector->setInput(h_tree_error_count[tree_idx]);
+            old_error = drift_detector->getEstimation();
+            error_change = drift_detector->setInput(h_tree_error_count[tree_idx]);
 
             if (error_change && old_error > drift_detector->getEstimation()) {
                 // if error is decreasing, do nothing
@@ -1627,13 +1660,14 @@ int main(int argc, char *argv[]) {
         }
 
         if (warning_tree_count > 0) {
-                cout << "ಠ_ಠ Warning detected at iter_count = " << iter_count << endl
+                cout << endl
+                    << "ಠ_ಠ Warning detected at iter_count = " << iter_count << endl
                     << "#warning = " << warning_tree_count << endl;
         }
 
-
         if (drift_tree_count > 0) {
-            cout << "(╯°□°）╯︵ ┻━┻ drift detected at iter_count = " << iter_count << endl
+            cout << endl
+                << "(╯°□°）╯︵ ┻━┻ drift detected at iter_count = " << iter_count << endl
                 << "#drift = " << drift_tree_count << endl;
 
             gpuErrchk(cudaMemcpy(d_drift_tree_idx_arr, h_drift_tree_idx_arr,
