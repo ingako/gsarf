@@ -115,6 +115,7 @@ vector<string> split_attributes(string line, char delim) {
     return arr;
 }
 
+
 vector<string> split(string str, string delim) {
     char* cstr = const_cast<char*>(str.c_str());
     char* current;
@@ -795,7 +796,9 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    int FOREGROUND_TREE_COUNT = TREE_COUNT;
     if (ENABLE_BACKGROUND_TREES) {
+        FOREGROUND_TREE_COUNT = TREE_COUNT;
         TREE_COUNT *= 2;
     }
 
@@ -908,6 +911,37 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    int CPU_TREE_POOL_SIZE = 15;
+    int cur_tree_pool_size = FOREGROUND_TREE_COUNT;
+
+    int tree_id[CPU_TREE_POOL_SIZE];
+
+    allocated = malloc(CPU_TREE_POOL_SIZE * NODE_COUNT_PER_TREE * sizeof(int));
+    if (allocated == NULL) {
+        log_file << "host error: memory allocation for cpu tree pool failed" << endl;
+        return 1;
+    }
+    int *cpu_tree_pool = (int*) allocated;
+
+
+    log_file << "Init: set root as leaf for each tree in the forest..." << endl;
+
+    for (int i = 0; i < TREE_COUNT; i++) {
+        int *cur_decision_tree = h_decision_trees + i * NODE_COUNT_PER_TREE;
+        cur_decision_tree[0] = (1 << 31);
+
+        for (int j = 1; j < NODE_COUNT_PER_TREE; j++) {
+            cur_decision_tree[j] = -1;
+        }
+    }
+
+    for (int i = 0; i < FOREGROUND_TREE_COUNT; i++) {
+        tree_id[i] = i;
+    }
+
+
+    gpuErrchk(cudaMemcpy(d_decision_trees, h_decision_trees, NODE_COUNT_PER_TREE * TREE_COUNT
+                * sizeof(int), cudaMemcpyHostToDevice));
 
 #if DEBUG
 
@@ -926,20 +960,6 @@ int main(int argc, char *argv[]) {
     int *h_leaf_back = (int*) allocated; // reverse pointer to map a leaf id to an offset in the tree array
 
 #endif
-
-    log_file << "Init: set root as leaf for each tree in the forest..." << endl;
-    for (int i = 0; i < TREE_COUNT; i++) {
-        int *cur_decision_tree = h_decision_trees + i * NODE_COUNT_PER_TREE;
-        cur_decision_tree[0] = (1 << 31);
-
-        for (int j = 1; j < NODE_COUNT_PER_TREE; j++) {
-            cur_decision_tree[j] = -1;
-        }
-
-    }
-
-    gpuErrchk(cudaMemcpy(d_decision_trees, h_decision_trees, NODE_COUNT_PER_TREE * TREE_COUNT
-                * sizeof(int), cudaMemcpyHostToDevice));
 
     // the offsets of leaves reached from tree traversal
     int *d_reached_leaf_ids;
@@ -1005,6 +1025,7 @@ int main(int argc, char *argv[]) {
         log_file << "host error: memory allocation for h_attribute_val_arr failed" << endl;
     }
     h_attribute_val_arr = (int*) allocated;
+
 
     if (!allocate_memory_on_device(&d_attribute_val_arr, "attribute_val_arr",
                 attribute_val_arr_len)) {
@@ -1149,14 +1170,14 @@ int main(int argc, char *argv[]) {
     // TODO
     // 0: inactive, 1: active, 2: must be inactive
     // add initial state
-    vector<char> cur_state(TREE_COUNT);
+    vector<char> cur_state(CPU_TREE_POOL_SIZE);
 
-    for (int i = 0; i < (TREE_COUNT >> 1); i++) {
+    for (int i = 0; i < FOREGROUND_TREE_COUNT; i++) {
         cur_state[i] = '1';
     }
 
-    for (int i = (TREE_COUNT >> 1); i < TREE_COUNT; i++) {
-        cur_state[i] = ENABLE_BACKGROUND_TREES ? '0' : '1';
+    for (int i = FOREGROUND_TREE_COUNT; i < CPU_TREE_POOL_SIZE; i++) {
+        cur_state[i] = '0';
     }
 
     cout << "initial state: ";
@@ -1169,12 +1190,13 @@ int main(int argc, char *argv[]) {
 
 
     // TODO
-    // 0: inactive, 1: active, 2: ungrown bg_tree, 3: growing bg_tree
+    // 0: inactive, 1: active, 2: inactive bg_tree, 3: active bg_tree
     int h_tree_active_status[TREE_COUNT];
     int *d_tree_active_status;
     if (!allocate_memory_on_device(&d_tree_active_status, "d_tree_active_status", TREE_COUNT)) {
         return 1;
     }
+
 
     if (ENABLE_BACKGROUND_TREES) {
         for (int i = 0; i < (TREE_COUNT >> 1); i++) {
@@ -1328,6 +1350,9 @@ int main(int argc, char *argv[]) {
         gpuErrchk(cudaMemset(d_forest_vote, 0, forest_vote_len * sizeof(int)));
         gpuErrchk(cudaMemcpy(d_forest_vote_idx_arr, h_forest_vote_idx_arr, forest_vote_len *
                     sizeof(int), cudaMemcpyHostToDevice));
+
+        gpuErrchk(cudaMemcpy(d_tree_active_status, h_tree_active_status,
+                    TREE_COUNT * sizeof(int), cudaMemcpyHostToDevice));
 
         log_file << "launching " << block_count * thread_count << " threads for tree_traversal" << endl;
 
@@ -1487,15 +1512,16 @@ int main(int argc, char *argv[]) {
 
         for (int tree_idx = 0; tree_idx < TREE_COUNT; tree_idx++) {
 
-            // select random attributes for foreground trees only
-            if (h_tree_active_status[tree_idx] != 1) {
+            // select random attributes for active trees only
+            if (h_tree_active_status[tree_idx] == 0 || h_tree_active_status[tree_idx] == 2) {
                 continue;
             }
 
             // output_file << "tree " << tree_idx << endl;
 
             int *cur_attribute_val_arr = h_attribute_val_arr + tree_idx * ATTRIBUTE_COUNT_PER_TREE;
-            select_k_attributes(cur_attribute_val_arr, ATTRIBUTE_COUNT_TOTAL, ATTRIBUTE_COUNT_PER_TREE);
+            select_k_attributes(cur_attribute_val_arr, ATTRIBUTE_COUNT_TOTAL,
+                    ATTRIBUTE_COUNT_PER_TREE);
 
             // for (int i = 0; i < ATTRIBUTE_COUNT_PER_TREE; i++) {
             //     output_file << cur_attribute_val_arr[i] << " ";
@@ -1611,12 +1637,8 @@ int main(int argc, char *argv[]) {
         // warning/drift detection only on foreground trees
         // if accuracy decreases, reset the tree
 
-        int detection_range = TREE_COUNT;
-        if (ENABLE_BACKGROUND_TREES) {
-            detection_range = (TREE_COUNT >> 1);
-        }
 
-        for (int tree_idx = 0; tree_idx < detection_range; tree_idx++) {
+        for (int tree_idx = 0; tree_idx < FOREGROUND_TREE_COUNT ; tree_idx++) {
 
             ADWIN *warning_detector = &warning_detectors[tree_idx];
             double old_error = warning_detector->getEstimation();
@@ -1631,7 +1653,7 @@ int main(int argc, char *argv[]) {
                 // warning_detector->resetChange();
 
                 // grow background tree
-                int bg_tree_pos = tree_idx + (TREE_COUNT >> 1);
+                int bg_tree_pos = tree_idx + FOREGROUND_TREE_COUNT;
                 if (h_tree_active_status[bg_tree_pos] == 2) {
                     // start growing if never grown
                     h_tree_active_status[bg_tree_pos] = 3;
@@ -1669,6 +1691,12 @@ int main(int argc, char *argv[]) {
             cout << endl
                 << "(╯°□°）╯︵ ┻━┻ drift detected at iter_count = " << iter_count << endl
                 << "#drift = " << drift_tree_count << endl;
+
+            cout << "tree active status: ";
+            for (int i = 0; i < TREE_COUNT; i++) {
+                cout << h_tree_active_status[i] << " ";
+            }
+            cout << endl;;
 
             gpuErrchk(cudaMemcpy(d_drift_tree_idx_arr, h_drift_tree_idx_arr,
                         drift_tree_count * sizeof(int), cudaMemcpyHostToDevice));
