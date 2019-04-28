@@ -1186,8 +1186,11 @@ int main(int argc, char *argv[]) {
     }
     cout << endl;
 
-    state_queue->get(cur_state); // TODO improve LRU_state API
-
+    vector<char> closest_state = state_queue->get_closest_state(cur_state);
+    if (closest_state.size() == 0) {
+        state_queue->enqueue(cur_state);
+    }
+    cout << "get_closest_state: " << state_queue->to_string() << endl;
 
     // TODO
     // 0: inactive, 1: active, 2: inactive bg_tree, 3: active bg_tree
