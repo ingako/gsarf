@@ -18,6 +18,7 @@
 #include <thrust/execution_policy.h>
 #include "ADWIN.cu"
 #include "LRU_state.cu"
+#include "state_graph.cu"
 
 using namespace std;
 
@@ -1161,10 +1162,11 @@ int main(int argc, char *argv[]) {
     }
 
     // pointer to the start of the background decision trees
-    int *d_backgound_decision_trees = d_decision_trees + (TREE_COUNT >> 1) * NODE_COUNT_PER_TREE;
+    int *h_background_trees = h_decision_trees + FOREGROUND_TREE_COUNT * NODE_COUNT_PER_TREE;
 
 
     // for swapping background trees when drift is detected
+    state_graph* state_transition_graph = new state_graph(CPU_TREE_POOL_SIZE);
     LRU_state* state_queue = new LRU_state(3, 0);
 
     // TODO
@@ -1186,11 +1188,6 @@ int main(int argc, char *argv[]) {
     }
     cout << endl;
 
-    vector<char> closest_state = state_queue->get_closest_state(cur_state);
-    if (closest_state.size() == 0) {
-        state_queue->enqueue(cur_state);
-    }
-    cout << "get_closest_state: " << state_queue->to_string() << endl;
 
     // TODO
     // 0: inactive, 1: active, 2: inactive bg_tree, 3: active bg_tree
@@ -1631,6 +1628,7 @@ int main(int argc, char *argv[]) {
         int h_drift_tree_idx_arr[TREE_COUNT];
 
         vector<char> target_state(cur_state);
+        vector<int> drift_tree_id_list;
 
         // warning/drift detection only on foreground trees
         // if accuracy decreases, reset the tree
@@ -1673,8 +1671,10 @@ int main(int argc, char *argv[]) {
             drift_detector->resetChange();
 
             h_drift_tree_idx_arr[drift_tree_count] = tree_idx;
-            target_state[tree_id[tree_idx]] = '2';
             drift_tree_count++;
+
+            target_state[tree_id[tree_idx]] = '2';
+            drift_tree_id_list.push_back(tree_id[tree_idx]);
         }
 
         if (warning_tree_count > 0) {
@@ -1699,6 +1699,29 @@ int main(int argc, char *argv[]) {
                 cout << target_state[i] << " ";
             }
             cout << endl;
+
+            gpuErrchk(cudaMemcpy(h_decision_trees, d_decision_trees, TREE_COUNT * NODE_COUNT_PER_TREE *
+                        sizeof(int), cudaMemcpyDeviceToHost));
+
+
+            vector<char> closest_state;
+            if  (state_transition_graph->is_stable) {
+                closest_state = target_state;
+
+                for (int drift_tree_id : drift_tree_id_list) {
+                    int next_tree_id =
+                        state_transition_graph->get_next_tree_id(drift_tree_id);
+
+                    closest_state[drift_tree_id] = '0';
+                    closest_state[next_tree_id] = '1';
+                }
+
+            } else {
+                closest_state = state_queue->get_closest_state(target_state);
+            }
+
+            string closest_state_str(closest_state.begin(), closest_state.end());
+            cout << "get_closest_state: " << closest_state_str << endl;
 
 
             gpuErrchk(cudaMemcpy(d_drift_tree_idx_arr, h_drift_tree_idx_arr,
