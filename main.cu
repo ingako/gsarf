@@ -131,6 +131,7 @@ vector<string> split(string str, string delim) {
     return arr;
 }
 
+
 __global__ void setup_kernel(curandState *state) {
     int idx = threadIdx.x + blockDim.x * blockIdx.x;
     curand_init(42, idx, 0, &state[idx]);
@@ -915,8 +916,6 @@ int main(int argc, char *argv[]) {
     int CPU_TREE_POOL_SIZE = 15;
     int cur_tree_pool_size = FOREGROUND_TREE_COUNT;
 
-    int tree_id[CPU_TREE_POOL_SIZE];
-
     allocated = malloc(CPU_TREE_POOL_SIZE * NODE_COUNT_PER_TREE * sizeof(int));
     if (allocated == NULL) {
         log_file << "host error: memory allocation for cpu tree pool failed" << endl;
@@ -936,15 +935,37 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    int forest_idx_to_tree_id[FOREGROUND_TREE_COUNT];
+    int tree_id_to_forest_idx[CPU_TREE_POOL_SIZE];
+
     for (int i = 0; i < FOREGROUND_TREE_COUNT; i++) {
-        tree_id[i] = i;
+        forest_idx_to_tree_id[i] = i;
+        tree_id_to_forest_idx[i] = i;
+    }
+
+    for (int i = 0; i < TREE_COUNT; i++) {
+        tree_id_to_forest_idx[i] = -1;
     }
 
 
     gpuErrchk(cudaMemcpy(d_decision_trees, h_decision_trees, NODE_COUNT_PER_TREE * TREE_COUNT
                 * sizeof(int), cudaMemcpyHostToDevice));
 
-#if DEBUG
+
+    allocated = malloc(LEAF_COUNT_PER_TREE * CPU_TREE_POOL_SIZE * sizeof(int));
+    if (allocated == NULL) {
+        log_file << "host error: memory allocation for leaf_class failed" << endl;
+        return 1;
+    }
+    int *cpu_leaf_class = (int*) allocated; // stores the class for a given leaf
+
+    allocated = malloc(LEAF_COUNT_PER_TREE *  CPU_TREE_POOL_SIZE * sizeof(int));
+    if (allocated == NULL) {
+        log_file << "host error: memory allocation for leaf_back failed" << endl;
+        return 1;
+    }
+    int *cpu_leaf_back = (int*) allocated; // reverse pointer to map a leaf id to an offset in the tree array
+
 
     allocated = malloc(LEAF_COUNT_PER_TREE * TREE_COUNT * sizeof(int));
     if (allocated == NULL) {
@@ -960,7 +981,6 @@ int main(int argc, char *argv[]) {
     }
     int *h_leaf_back = (int*) allocated; // reverse pointer to map a leaf id to an offset in the tree array
 
-#endif
 
     // the offsets of leaves reached from tree traversal
     int *d_reached_leaf_ids;
@@ -1139,14 +1159,12 @@ int main(int argc, char *argv[]) {
 
     // one warning and drift detector per tree to monitor accuracy
     // initialized with the default construct where delta=0.001
-    vector<ADWIN> warning_detectors(TREE_COUNT);
-    vector<ADWIN> drift_detectors(TREE_COUNT);
+    vector<ADWIN> warning_detectors;
+    vector<ADWIN> drift_detectors;
 
-    if (ENABLE_BACKGROUND_TREES) {
-        for (int i = 0; i < TREE_COUNT; i++) {
-            warning_detectors[i] = ADWIN((double) 0.1);
-            drift_detectors[i] = ADWIN((double) 0.000001);
-        }
+    for (int i = 0; i < FOREGROUND_TREE_COUNT; i++) {
+        warning_detectors.push_back(ADWIN((double) 0.001));
+        drift_detectors.push_back(ADWIN((double) 0.00001));
     }
 
     int tree_error_count_len = FOREGROUND_TREE_COUNT;
@@ -1182,7 +1200,7 @@ int main(int argc, char *argv[]) {
         cur_state[i] = '0';
     }
 
-    cout << "initial state: ";
+    cout << "initial cur_state: ";
     for (int i = 0; i < cur_state.size(); i++) {
         cout << cur_state[i];
     }
@@ -1624,8 +1642,10 @@ int main(int argc, char *argv[]) {
                     tree_error_count_len * sizeof(int), cudaMemcpyDeviceToHost));
 
         int warning_tree_count = 0;
+        int h_warning_tree_idx_arr[FOREGROUND_TREE_COUNT];
+
         int drift_tree_count = 0;
-        int h_drift_tree_idx_arr[TREE_COUNT];
+        int h_drift_tree_idx_arr[FOREGROUND_TREE_COUNT];
 
         vector<char> target_state(cur_state);
         vector<int> drift_tree_id_list;
@@ -1641,17 +1661,20 @@ int main(int argc, char *argv[]) {
                 error_change = false;
             }
 
+            int bg_tree_pos = tree_idx + FOREGROUND_TREE_COUNT;
+
+            // warning detected
             if (error_change) {
-                warning_tree_count++;
-                // warning_detector->resetChange();
+                warning_detectors[tree_idx] = ADWIN((double) 0.001);
 
                 // grow background tree
-                int bg_tree_pos = tree_idx + FOREGROUND_TREE_COUNT;
                 if (h_tree_active_status[bg_tree_pos] == 2) {
                     // start growing if never grown
                     h_tree_active_status[bg_tree_pos] = 3;
                 }
 
+                h_warning_tree_idx_arr[warning_tree_count] = tree_idx;
+                warning_tree_count++;
             }
 
             ADWIN *drift_detector = &drift_detectors[tree_idx];
@@ -1667,26 +1690,39 @@ int main(int argc, char *argv[]) {
                 continue;
             }
 
-            warning_detector->resetChange();
-            drift_detector->resetChange();
+            // drift detected
+            warning_detectors[tree_idx] = ADWIN((double) 0.001);
+            drift_detector[tree_idx] = ADWIN((double) 0.00001);
+
+            // TODO reset background tree
+            h_tree_active_status[bg_tree_pos] = 2;
 
             h_drift_tree_idx_arr[drift_tree_count] = tree_idx;
             drift_tree_count++;
 
-            target_state[tree_id[tree_idx]] = '2';
-            drift_tree_id_list.push_back(tree_id[tree_idx]);
+            target_state[forest_idx_to_tree_id[tree_idx]] = '2';
+            drift_tree_id_list.push_back(forest_idx_to_tree_id[tree_idx]);
         }
 
         if (warning_tree_count > 0) {
-                cout << endl
-                    << "ಠ_ಠ Warning detected at iter_count = " << iter_count << endl
-                    << "#warning = " << warning_tree_count << endl;
+            cout << endl
+                << "ಠ_ಠ Warning detected at iter_count = " << iter_count << endl;
+            cout << "warning tree forest_idx: ";
+            for (int i = 0; i < warning_tree_count; i++) {
+                cout << h_warning_tree_idx_arr[i] << " ";
+            }
+            cout << endl;
         }
 
         if (drift_tree_count > 0) {
             cout << endl
-                << "(╯°□°）╯︵ ┻━┻ drift detected at iter_count = " << iter_count << endl
-                << "#drift = " << drift_tree_count << endl;
+                << "(╯°□°）╯︵ ┻━┻ drift detected at iter_count = " << iter_count << endl;
+
+            cout << "drift tree forest_idx: ";
+            for (int i = 0; i < drift_tree_count; i++) {
+                cout << h_drift_tree_idx_arr[i] << " ";
+            }
+            cout << endl;
 
             cout << "tree active status: ";
             for (int i = 0; i < TREE_COUNT; i++) {
@@ -1700,8 +1736,33 @@ int main(int argc, char *argv[]) {
             }
             cout << endl;
 
-            gpuErrchk(cudaMemcpy(h_decision_trees, d_decision_trees, TREE_COUNT * NODE_COUNT_PER_TREE *
-                        sizeof(int), cudaMemcpyDeviceToHost));
+            gpuErrchk(cudaMemcpy(h_decision_trees, d_decision_trees, TREE_COUNT
+                        * NODE_COUNT_PER_TREE * sizeof(int), cudaMemcpyDeviceToHost));
+            gpuErrchk(cudaMemcpy(h_leaf_class, d_leaf_class, TREE_COUNT
+                        * LEAF_COUNT_PER_TREE * sizeof(int), cudaMemcpyDeviceToHost));
+            gpuErrchk(cudaMemcpy(h_leaf_back, d_leaf_back, TREE_COUNT
+                        * LEAF_COUNT_PER_TREE * sizeof(int), cudaMemcpyDeviceToHost));
+
+            for (int tree_idx = 0; tree_idx < TREE_COUNT; tree_idx++) {
+                int* cur_tree = h_decision_trees + tree_idx * NODE_COUNT_PER_TREE;
+                int* cur_leaf_class = h_leaf_class + tree_idx *
+                    LEAF_COUNT_PER_TREE;
+                int* cur_leaf_back = h_leaf_back + tree_idx *
+                    LEAF_COUNT_PER_TREE;
+                cout << "tree " << tree_idx << ":" << endl;
+                for (int node_idx = 0; node_idx < NODE_COUNT_PER_TREE; node_idx++) {
+                    cout << cur_tree[node_idx] << ",";
+                }
+                cout << endl;
+                for (int leaf_idx = 0; leaf_idx < LEAF_COUNT_PER_TREE; leaf_idx++) {
+                    cout << cur_leaf_class[leaf_idx] << ",";
+                }
+                cout << endl;
+                for (int leaf_idx = 0; leaf_idx < LEAF_COUNT_PER_TREE; leaf_idx++) {
+                    cout << cur_leaf_back[leaf_idx] << ",";
+                }
+                cout << endl;
+            }
 
 
             vector<char> closest_state;
@@ -1724,25 +1785,132 @@ int main(int argc, char *argv[]) {
             cout << "get_closest_state: " << closest_state_str << endl;
 
 
-            gpuErrchk(cudaMemcpy(d_drift_tree_idx_arr, h_drift_tree_idx_arr,
-                        drift_tree_count * sizeof(int), cudaMemcpyHostToDevice));
+            vector<char> next_state;
+            if (closest_state.size() == 0) {
+                next_state = cur_state;
+                for (int i = 0; i < drift_tree_id_list.size(); i++) {
+                    int tree_id = drift_tree_id_list[i];
+                    int forest_tree_idx = h_drift_tree_idx_arr[i];
+                    int forest_bg_tree_idx = forest_tree_idx + FOREGROUND_TREE_COUNT;
 
-            reset_tree<<<1, drift_tree_count>>>(
-                    d_drift_tree_idx_arr,
-                    d_decision_trees,
-                    d_leaf_counters,
-                    d_leaf_class,
-                    d_leaf_back,
-                    d_samples_seen_count,
-                    d_cur_node_count_per_tree,
-                    d_cur_leaf_count_per_tree,
-                    NODE_COUNT_PER_TREE,
-                    LEAF_COUNT_PER_TREE,
-                    leaf_counter_size,
-                    leaf_counter_row_len,
-                    CLASS_COUNT);
+                    // if (get_kappa(forest_tree_idx) - get_kappa(forest_bg_tree_idx)) {
+                    //     // false positive
+                    //     continue;
+                    // }
 
-            cudaDeviceSynchronize();
+                    // put drift tree back to cpu tree pool
+                    memcpy(cpu_tree_pool + tree_id * NODE_COUNT_PER_TREE,
+                            h_decision_trees + forest_tree_idx * NODE_COUNT_PER_TREE,
+                            NODE_COUNT_PER_TREE * sizeof(int));
+                    memcpy(cpu_leaf_class + tree_id * LEAF_COUNT_PER_TREE,
+                            h_leaf_class + forest_tree_idx * LEAF_COUNT_PER_TREE,
+                            LEAF_COUNT_PER_TREE * sizeof(int));
+                    memcpy(cpu_leaf_back + tree_id * LEAF_COUNT_PER_TREE,
+                            h_leaf_class + forest_tree_idx * LEAF_COUNT_PER_TREE,
+                            LEAF_COUNT_PER_TREE * sizeof(int));
+
+                    // replace drift tree with its background tree
+                    memcpy(h_decision_trees + forest_tree_idx * NODE_COUNT_PER_TREE,
+                            h_decision_trees + forest_bg_tree_idx * NODE_COUNT_PER_TREE,
+                            NODE_COUNT_PER_TREE * sizeof(int));
+                    memcpy(h_leaf_class + forest_tree_idx * LEAF_COUNT_PER_TREE,
+                            h_leaf_class + forest_bg_tree_idx * LEAF_COUNT_PER_TREE,
+                            LEAF_COUNT_PER_TREE * sizeof(int));
+                    memcpy(h_leaf_back + forest_tree_idx * LEAF_COUNT_PER_TREE,
+                            h_leaf_back + forest_bg_tree_idx * LEAF_COUNT_PER_TREE,
+                            LEAF_COUNT_PER_TREE * sizeof(int));
+
+                    // add background tree to cpu_tree_pool
+                    int new_tree_id = cur_tree_pool_size;
+                    int *cur_cpu_tree_slot = cpu_tree_pool + new_tree_id * NODE_COUNT_PER_TREE;
+
+                    memcpy(cpu_tree_pool + new_tree_id * NODE_COUNT_PER_TREE,
+                            h_decision_trees + forest_bg_tree_idx * NODE_COUNT_PER_TREE,
+                            NODE_COUNT_PER_TREE * sizeof(int));
+                    memcpy(cpu_leaf_class + new_tree_id * LEAF_COUNT_PER_TREE,
+                            h_leaf_class + forest_bg_tree_idx * LEAF_COUNT_PER_TREE,
+                            LEAF_COUNT_PER_TREE * sizeof(int));
+                    memcpy(cpu_leaf_back + new_tree_id * LEAF_COUNT_PER_TREE,
+                            h_leaf_back + forest_bg_tree_idx * LEAF_COUNT_PER_TREE,
+                            LEAF_COUNT_PER_TREE * sizeof(int));
+
+                    forest_idx_to_tree_id[forest_tree_idx] = new_tree_id;
+                    tree_id_to_forest_idx[new_tree_id] = forest_tree_idx;
+
+                    next_state[new_tree_id] = 1;
+                    next_state[tree_id] = 0;
+
+                    cur_tree_pool_size++;
+                }
+
+            }
+
+            for (int tree_idx = 0; tree_idx < TREE_COUNT; tree_idx++) {
+                int* cur_tree = h_decision_trees + tree_idx * NODE_COUNT_PER_TREE;
+                int* cur_leaf_class = h_leaf_class + tree_idx *
+                    LEAF_COUNT_PER_TREE;
+                int* cur_leaf_back = h_leaf_class + tree_idx *
+                    LEAF_COUNT_PER_TREE;
+                cout << "tree " << tree_idx << ":" << endl;
+                for (int node_idx = 0; node_idx < NODE_COUNT_PER_TREE; node_idx++) {
+                    cout << cur_tree[node_idx] << ",";
+                }
+                cout << endl;
+                for (int leaf_idx = 0; leaf_idx < LEAF_COUNT_PER_TREE; leaf_idx++) {
+                    cout << cur_leaf_class[leaf_idx] << ",";
+                }
+                cout << endl;
+                for (int leaf_idx = 0; leaf_idx < LEAF_COUNT_PER_TREE; leaf_idx++) {
+                    cout << cur_leaf_back[leaf_idx] << ",";
+                }
+                cout << endl;
+
+
+                cout << "CPU copied data: " << endl;
+                int* cur_cpu_tree = cpu_tree_pool + tree_idx * NODE_COUNT_PER_TREE;
+                for (int i = 0; i < NODE_COUNT_PER_TREE; i++) {
+                    cout << cur_cpu_tree[i] << ",";
+                }
+                cout << endl;
+                int* cur_cpu_leaf_class = cpu_leaf_class + tree_idx * LEAF_COUNT_PER_TREE;
+                for (int i = 0; i < LEAF_COUNT_PER_TREE; i++) {
+                    cout << cur_cpu_leaf_class[i] << ",";
+                }
+                cout << endl;
+            }
+
+
+            cur_state = next_state;
+            state_queue->enqueue(cur_state);
+            state_queue->to_string();
+
+            gpuErrchk(cudaMemcpy(d_decision_trees, h_decision_trees, NODE_COUNT_PER_TREE
+                        * TREE_COUNT * sizeof(int), cudaMemcpyHostToDevice));
+            gpuErrchk(cudaMemcpy(d_leaf_class, h_leaf_class, TREE_COUNT
+                        * LEAF_COUNT_PER_TREE * sizeof(int), cudaMemcpyHostToDevice));
+            gpuErrchk(cudaMemcpy(d_leaf_back, h_leaf_back, TREE_COUNT
+                        * LEAF_COUNT_PER_TREE * sizeof(int), cudaMemcpyHostToDevice));
+
+            // gpuErrchk(cudaMemcpy(d_drift_tree_idx_arr, h_drift_tree_idx_arr,
+            //             drift_tree_count * sizeof(int), cudaMemcpyHostToDevice));
+
+            // TODO reset background trees only
+            // reset_tree<<<1, drift_tree_count>>>(
+            //         d_drift_tree_idx_arr,
+            //         d_decision_trees,
+            //         d_leaf_counters,
+            //         d_leaf_class,
+            //         d_leaf_back,
+            //         d_samples_seen_count,
+            //         d_cur_node_count_per_tree,
+            //         d_cur_leaf_count_per_tree,
+            //         NODE_COUNT_PER_TREE,
+            //         LEAF_COUNT_PER_TREE,
+            //         leaf_counter_size,
+            //         leaf_counter_row_len,
+            //         CLASS_COUNT);
+
+            // cudaDeviceSynchronize();
         }
 
         iter_count++;
