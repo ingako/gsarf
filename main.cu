@@ -965,7 +965,7 @@ int main(int argc, char *argv[]) {
     }
 
     // CPU tree pool allocations
-    int CPU_TREE_POOL_SIZE = TREE_COUNT * 3;
+    int CPU_TREE_POOL_SIZE = TREE_COUNT * 20;
     int cur_tree_pool_size = FOREGROUND_TREE_COUNT;
 
     allocated = malloc(CPU_TREE_POOL_SIZE * NODE_COUNT_PER_TREE * sizeof(int));
@@ -987,8 +987,8 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    int forest_idx_to_tree_id[FOREGROUND_TREE_COUNT];
-    int tree_id_to_forest_idx[CPU_TREE_POOL_SIZE];
+    int* forest_idx_to_tree_id = (int*) malloc(FOREGROUND_TREE_COUNT * sizeof(int));
+    int* tree_id_to_forest_idx = (int*) malloc(CPU_TREE_POOL_SIZE * sizeof(int));
 
     for (int i = 0; i < FOREGROUND_TREE_COUNT; i++) {
         forest_idx_to_tree_id[i] = i;
@@ -1056,8 +1056,13 @@ int main(int argc, char *argv[]) {
     int ALL_LEAF_COUNTERS_SIZE = TREE_COUNT * LEAF_COUNTERS_SIZE_PER_TREE;
 
     int* h_leaf_counters = (int*) calloc(ALL_LEAF_COUNTERS_SIZE, sizeof(int));
-    int* cpu_leaf_counters = (int*) malloc(LEAF_COUNTERS_SIZE_PER_TREE
-            * CPU_TREE_POOL_SIZE * sizeof(int));
+
+    long cpu_leaf_counters_size = (long) LEAF_COUNTERS_SIZE_PER_TREE
+        * CPU_TREE_POOL_SIZE;
+    int* cpu_leaf_counters = (int*) malloc(cpu_leaf_counters_size * sizeof(int));
+    cout << "-------------------cpu_leaf_counters_size: " <<
+        cpu_leaf_counters_size << endl;
+
 
     // init mask row
     for (int tree_idx = 0; tree_idx < TREE_COUNT; tree_idx++) {
