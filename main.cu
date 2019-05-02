@@ -222,10 +222,12 @@ __global__ void reset_tree(
         int *samples_seen_count,
         int *node_count_per_tree,
         int *leaf_count_per_tree,
+        int *tree_confusion_matrix,
         int max_node_count_per_tree,
         int max_leaf_count_per_tree,
         int leaf_counter_size,
         int leaf_counter_row_len,
+        int confusion_matrix_size,
         int class_count) {
 
     // <<<1, reseted_tree_count>>>
@@ -258,6 +260,12 @@ __global__ void reset_tree(
         for (int ij = 0; ij < leaf_counter_row_len; ij++) {
             cur_leaf_counter[k * leaf_counter_row_len + ij] = k == 1 ? 1 : 0;
         }
+    }
+
+    int *cur_tree_confusion_matrix = tree_confusion_matrix + tree_idx * confusion_matrix_size;
+
+    for (int i = 0; i < confusion_matrix_size; i++) {
+        cur_tree_confusion_matrix[i] = 0;
     }
 }
 
@@ -1226,7 +1234,12 @@ int main(int argc, char *argv[]) {
     }
 
     int* d_drift_tree_idx_arr;
-    if (!allocate_memory_on_device(&d_drift_tree_idx_arr, "reseted_tree_idx_arr", TREE_COUNT)) {
+    if (!allocate_memory_on_device(&d_drift_tree_idx_arr, "drift_tree_idx_arr", TREE_COUNT)) {
+        return 1;
+    }
+
+    int* d_warning_tree_idx_arr;
+    if (!allocate_memory_on_device(&d_warning_tree_idx_arr, "warning_tree_idx_arr", TREE_COUNT)) {
         return 1;
     }
 
@@ -1809,6 +1822,28 @@ int main(int argc, char *argv[]) {
                 cout << h_warning_tree_idx_arr[i] << " ";
             }
             cout << endl;
+
+            gpuErrchk(cudaMemcpy(d_warning_tree_idx_arr, h_warning_tree_idx_arr,
+                        warning_tree_count * sizeof(int), cudaMemcpyHostToDevice));
+
+            reset_tree<<<1, warning_tree_count>>>(
+                    d_warning_tree_idx_arr,
+                    d_decision_trees,
+                    d_leaf_counters,
+                    d_leaf_class,
+                    d_leaf_back,
+                    d_samples_seen_count,
+                    d_cur_node_count_per_tree,
+                    d_cur_leaf_count_per_tree,
+                    d_tree_confusion_matrix,
+                    NODE_COUNT_PER_TREE,
+                    LEAF_COUNT_PER_TREE,
+                    LEAF_COUNTER_SIZE,
+                    leaf_counter_row_len,
+                    confusion_matrix_size,
+                    CLASS_COUNT);
+
+            cudaDeviceSynchronize();
         }
 
         if (drift_tree_count > 0) {
@@ -1986,7 +2021,7 @@ int main(int argc, char *argv[]) {
             cout << endl;
 
             cout << "CPU copied data: " << endl;
-            for (int tree_idx = 0; tree_idx < CPU_TREE_POOL_SIZE; tree_idx++) {
+            for (int tree_idx = 0; tree_idx < cur_tree_pool_size; tree_idx++) {
                 cout << "cpu tree " << tree_idx << ":" << endl;
                 int* cur_cpu_tree = cpu_decision_trees + tree_idx * NODE_COUNT_PER_TREE;
                 for (int i = 0; i < NODE_COUNT_PER_TREE; i++) {
@@ -2019,26 +2054,35 @@ int main(int argc, char *argv[]) {
             gpuErrchk(cudaMemcpy(d_samples_seen_count, h_samples_seen_count,
                         TREE_COUNT * LEAF_COUNT_PER_TREE * sizeof(int), cudaMemcpyHostToDevice));
 
-            // gpuErrchk(cudaMemcpy(d_drift_tree_idx_arr, h_drift_tree_idx_arr,
-            //             drift_tree_count * sizeof(int), cudaMemcpyHostToDevice));
+            gpuErrchk(cudaMemcpy(d_drift_tree_idx_arr, h_drift_tree_idx_arr,
+                        drift_tree_count * sizeof(int), cudaMemcpyHostToDevice));
 
             // TODO reset background trees only
-            // reset_tree<<<1, drift_tree_count>>>(
-            //         d_drift_tree_idx_arr,
-            //         d_decision_trees,
-            //         d_leaf_counters,
-            //         d_leaf_class,
-            //         d_leaf_back,
-            //         d_samples_seen_count,
-            //         d_cur_node_count_per_tree,
-            //         d_cur_leaf_count_per_tree,
-            //         NODE_COUNT_PER_TREE,
-            //         LEAF_COUNT_PER_TREE,
-            //         LEAF_COUNTER_SIZE,
-            //         leaf_counter_row_len,
-            //         CLASS_COUNT);
+            for (int i = 0; i < drift_tree_count; i++) {
+                h_drift_tree_idx_arr[i] = h_drift_tree_idx_arr[i] + FOREGROUND_TREE_COUNT;
+            }
 
-            // cudaDeviceSynchronize();
+            gpuErrchk(cudaMemcpy(d_drift_tree_idx_arr, h_drift_tree_idx_arr,
+                        drift_tree_count * sizeof(int), cudaMemcpyHostToDevice));
+
+            reset_tree<<<1, drift_tree_count>>>(
+                    d_drift_tree_idx_arr,
+                    d_decision_trees,
+                    d_leaf_counters,
+                    d_leaf_class,
+                    d_leaf_back,
+                    d_samples_seen_count,
+                    d_cur_node_count_per_tree,
+                    d_cur_leaf_count_per_tree,
+                    d_tree_confusion_matrix,
+                    NODE_COUNT_PER_TREE,
+                    LEAF_COUNT_PER_TREE,
+                    LEAF_COUNTER_SIZE,
+                    leaf_counter_row_len,
+                    confusion_matrix_size,
+                    CLASS_COUNT);
+
+            cudaDeviceSynchronize();
         }
 
         iter_count++;
