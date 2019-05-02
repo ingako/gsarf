@@ -1404,6 +1404,7 @@ int main(int argc, char *argv[]) {
     output_file << "#iteration,accuracy,kappa" << endl;
 
     bool eof = false;
+    int matched_pattern = 0;
 
     while (!eof) {
 
@@ -1883,6 +1884,8 @@ int main(int argc, char *argv[]) {
             gpuErrchk(cudaMemcpy(h_samples_seen_count, d_samples_seen_count,
                         TREE_COUNT * LEAF_COUNT_PER_TREE * sizeof(int), cudaMemcpyDeviceToHost));
 
+#if DEBUG
+
             for (int tree_idx = 0; tree_idx < TREE_COUNT; tree_idx++) {
                 int* cur_tree = h_decision_trees + tree_idx * NODE_COUNT_PER_TREE;
                 int* cur_leaf_class = h_leaf_class + tree_idx *
@@ -1904,6 +1907,7 @@ int main(int argc, char *argv[]) {
                 cout << endl;
             }
 
+#endif
 
             vector<char> closest_state;
             if  (state_transition_graph->is_stable) {
@@ -1930,7 +1934,8 @@ int main(int argc, char *argv[]) {
                 next_state = cur_state;
 
                 gpuErrchk(cudaMemcpy(h_tree_confusion_matrix, d_tree_confusion_matrix,
-                           TREE_COUNT * sizeof(int), cudaMemcpyDeviceToHost));
+                           TREE_COUNT * confusion_matrix_size * sizeof(int),
+                           cudaMemcpyDeviceToHost));
 
                 for (int i = 0; i < drift_tree_id_list.size(); i++) {
                     if (cur_tree_pool_size >= CPU_TREE_POOL_SIZE) {
@@ -1963,16 +1968,23 @@ int main(int argc, char *argv[]) {
                             bg_tree_accuracy,
                             INSTANCE_COUNT_PER_TREE);
 
+#if DEBUG
+
                     cout << "--------------drift kappa: " << drift_tree_kappa << endl;
                     cout << "---------fg_tree_accuracy: " << fg_tree_accuracy << endl;
                     cout << "-----------------bg kappa: " << bg_tree_kappa << endl;
                     cout << "---------bg_tree_accuracy: " << bg_tree_accuracy << endl;
+
+#endif
 
                     if (fabs(drift_tree_kappa - bg_tree_kappa) < 0.1) {
                         // false positive
                         // TODO reset_tree
                         continue;
                     }
+
+                    cout << "forest_tree_idx: " << forest_tree_idx << endl;
+                    cout << "tree_idx: " << tree_id << endl;
 
                     // put drift tree back to cpu tree pool
                     tree_memcpy(&h_forest[forest_tree_idx], &cpu_forest[tree_id]);
@@ -1988,13 +2000,56 @@ int main(int argc, char *argv[]) {
                     tree_id_to_forest_idx[new_tree_id] = forest_tree_idx;
                     tree_id_to_forest_idx[tree_id] = -1; // drift tree no longer in forest
 
-                    next_state[new_tree_id] = 1;
-                    next_state[tree_id] = 0;
+                    next_state[new_tree_id] = '1';
+                    next_state[tree_id] = '0';
 
                     cur_tree_pool_size++;
                 }
 
+            } else {
+
+                matched_pattern++;
+
+                next_state = closest_state;
+                vector<char> remove_tree_id_vec;
+                vector<char> add_tree_id_vec;
+
+                for (int i = 0; i < CPU_TREE_POOL_SIZE; i++) {
+                    if (cur_state[i] == '1' && next_state[i] == '0') {
+                        remove_tree_id_vec.push_back(i);
+
+                    } else if (cur_state[i] == '0' && next_state[i] == '1') {
+                        add_tree_id_vec.push_back(i);
+
+                    } else {
+                        cout << "error: wrong state transition" << endl;
+                        return 1;
+                    }
+                }
+
+                if (remove_tree_id_vec.size() != add_tree_id_vec.size()) {
+                    cout << "error: number of removal and addition does not match" << endl;
+                    return 1;
+                }
+
+                for (int i = 0; i < remove_tree_id_vec.size(); i++) {
+                    int remove_tree_id = remove_tree_id_vec[i];
+                    int remove_tree_forest_idx = tree_id_to_forest_idx[remove_tree_id];
+                    int add_tree_id = add_tree_id_vec[i];
+
+                    // move a drift tree back to cpu tree pool
+                    tree_memcpy(&h_forest[remove_tree_forest_idx], &cpu_forest[remove_tree_id]);
+                    tree_id_to_forest_idx[remove_tree_id] = -1;
+
+                    // replace a drift tree with a cpu tree
+                    tree_memcpy(&cpu_forest[add_tree_id], &h_forest[remove_tree_forest_idx]);
+                    tree_id_to_forest_idx[add_tree_id] = remove_tree_forest_idx;
+
+                }
+
             }
+
+#if DEBUG
 
             for (int tree_idx = 0; tree_idx < TREE_COUNT; tree_idx++) {
                 int* cur_tree = h_decision_trees + tree_idx * NODE_COUNT_PER_TREE;
@@ -2015,8 +2070,6 @@ int main(int argc, char *argv[]) {
                     cout << cur_leaf_back[leaf_idx] << ",";
                 }
                 cout << endl;
-
-
             }
             cout << endl;
 
@@ -2034,6 +2087,8 @@ int main(int argc, char *argv[]) {
                 }
                 cout << endl;
             }
+
+#endif
 
             cur_state = next_state;
             state_queue->enqueue(cur_state);
@@ -2088,7 +2143,8 @@ int main(int argc, char *argv[]) {
         iter_count++;
     }
 
-    cout << "cur_tree_pool_size: " << cur_tree_pool_size << endl;
+    log_file << "cur_tree_pool_size: " << cur_tree_pool_size << endl;
+    log_file << "pattern matched: " << matched_pattern << endl;
 
 #if DEBUG
 
@@ -2137,6 +2193,7 @@ int main(int argc, char *argv[]) {
     cudaFree(d_attribute_val_arr);
     cudaFree(d_attribute_idx_arr);
     cudaFree(d_confusion_matrix);
+    cudaFree(d_tree_confusion_matrix);
 
     output_file.close();
 
