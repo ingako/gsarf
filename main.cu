@@ -2119,11 +2119,16 @@ int main(int argc, char *argv[]) {
 
             // TODO reset background trees only
             for (int i = 0; i < drift_tree_count; i++) {
-                h_drift_tree_idx_arr[i] = h_drift_tree_idx_arr[i] + FOREGROUND_TREE_COUNT;
+                int bg_tree_forest_idx = h_drift_tree_idx_arr[i] + FOREGROUND_TREE_COUNT;
+                h_drift_tree_idx_arr[i] = bg_tree_forest_idx;
+                h_tree_active_status[bg_tree_forest_idx] = 2;
             }
 
             gpuErrchk(cudaMemcpy(d_drift_tree_idx_arr, h_drift_tree_idx_arr,
                         drift_tree_count * sizeof(int), cudaMemcpyHostToDevice));
+
+            gpuErrchk(cudaMemcpy(d_tree_active_status, h_tree_active_status,
+                        TREE_COUNT * sizeof(int), cudaMemcpyHostToDevice));
 
             reset_tree<<<1, drift_tree_count>>>(
                     d_drift_tree_idx_arr,
