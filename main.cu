@@ -264,11 +264,11 @@ __global__ void reset_tree(
         }
     }
 
-    int *cur_tree_confusion_matrix = tree_confusion_matrix + tree_idx * confusion_matrix_size;
+    // int *cur_tree_confusion_matrix = tree_confusion_matrix + tree_idx * confusion_matrix_size;
 
-    for (int i = 0; i < confusion_matrix_size; i++) {
-        cur_tree_confusion_matrix[i] = 0;
-    }
+    // for (int i = 0; i < confusion_matrix_size; i++) {
+    //     cur_tree_confusion_matrix[i] = 0;
+    // }
 }
 
 __global__ void tree_traversal(
@@ -1334,7 +1334,6 @@ int main(int argc, char *argv[]) {
             h_cur_node_count_per_tree + tree_idx,
             h_cur_leaf_count_per_tree + tree_idx,
             h_samples_seen_count + tree_idx * LEAF_COUNT_PER_TREE,
-            h_tree_confusion_matrix + tree_idx * confusion_matrix_size,
         };
         h_forest.push_back(cur_tree);
     }
@@ -1470,6 +1469,7 @@ int main(int argc, char *argv[]) {
         gpuErrchk(cudaMemset(d_correct_counter, 0, sizeof(int)));
         gpuErrchk(cudaMemset(d_tree_error_count, 0, tree_error_count_len * sizeof(int)));
         gpuErrchk(cudaMemset(d_confusion_matrix, 0, confusion_matrix_size * sizeof(int)));
+        gpuErrchk(cudaMemset(d_tree_confusion_matrix, 0, TREE_COUNT * confusion_matrix_size * sizeof(int)));
 
         gpuErrchk(cudaMemset(d_forest_vote, 0, forest_vote_len * sizeof(int)));
         gpuErrchk(cudaMemcpy(d_forest_vote_idx_arr, h_forest_vote_idx_arr, forest_vote_len *
@@ -1878,6 +1878,8 @@ int main(int argc, char *argv[]) {
                         GROWING_TREE_COUNT * sizeof(int), cudaMemcpyDeviceToHost));
             gpuErrchk(cudaMemcpy(h_samples_seen_count, d_samples_seen_count,
                         GROWING_TREE_COUNT * LEAF_COUNT_PER_TREE * sizeof(int), cudaMemcpyDeviceToHost));
+            gpuErrchk(cudaMemcpy(h_tree_confusion_matrix, d_tree_confusion_matrix,
+                        TREE_COUNT * confusion_matrix_size * sizeof(int), cudaMemcpyDeviceToHost));
 
         }
 
@@ -1919,6 +1921,11 @@ int main(int argc, char *argv[]) {
                         tree_memcpy(&cpu_forest[i], &h_forest[candidate_tree_forest_idx], false);
                         h_tree_active_status[candidate_tree_forest_idx] = 5;
 
+                        int* candidate_confusion_matrix = h_tree_confusion_matrix
+                            + candidate_tree_forest_idx * confusion_matrix_size;
+                        memset(candidate_confusion_matrix, 0, confusion_matrix_size * sizeof(int));
+
+
                     } else {
                         cout << "error: wrong state transition" << endl;
                         return 1;
@@ -1940,7 +1947,6 @@ int main(int argc, char *argv[]) {
             cout << endl;
 
 #if DEBUG
-
             cout << "tree active status: ";
             for (int i = 0; i < TREE_COUNT; i++) {
                 cout << h_tree_active_status[i] << " ";
@@ -1979,10 +1985,6 @@ int main(int argc, char *argv[]) {
 
             vector<char> next_state(cur_state);
 
-            gpuErrchk(cudaMemcpy(h_tree_confusion_matrix, d_tree_confusion_matrix,
-                       TREE_COUNT * confusion_matrix_size * sizeof(int),
-                       cudaMemcpyDeviceToHost));
-
             for (int i = 0; i < drift_tree_id_list.size(); i++) {
                 if (cur_tree_pool_size >= CPU_TREE_POOL_SIZE) {
                     // TODO
@@ -2000,8 +2002,10 @@ int main(int argc, char *argv[]) {
                         - h_tree_error_count[forest_tree_idx])
                         / (double) INSTANCE_COUNT_PER_TREE;
 
+                int* cur_confusion_matrix = h_tree_confusion_matrix + forest_tree_idx * confusion_matrix_size;
+
                 double drift_tree_kappa = get_kappa(
-                        h_forest[forest_tree_idx].confusion_matrix,
+                        cur_confusion_matrix,
                         CLASS_COUNT,
                         fg_tree_accuracy,
                         INSTANCE_COUNT_PER_TREE);
@@ -2019,7 +2023,7 @@ int main(int argc, char *argv[]) {
                                 / (double) INSTANCE_COUNT_PER_TREE;
 
                     double bg_tree_kappa = get_kappa(
-                                h_forest[forest_bg_tree_idx].confusion_matrix,
+                                h_tree_confusion_matrix + forest_bg_tree_idx * confusion_matrix_size,
                                 CLASS_COUNT,
                                 bg_tree_accuracy,
                                 INSTANCE_COUNT_PER_TREE);
@@ -2027,7 +2031,7 @@ int main(int argc, char *argv[]) {
                     cout << "-----------------bg kappa: " << bg_tree_kappa << endl;
                     cout << "---------bg_tree_accuracy: " << bg_tree_accuracy << endl;
 
-                    if (bg_tree_kappa - drift_tree_kappa > 0.1) {
+                    if (bg_tree_kappa - drift_tree_kappa > 0.01) {
                         forest_swap_tree_idx = forest_bg_tree_idx;
                         swap_tree_kappa = bg_tree_kappa;
                     }
@@ -2041,7 +2045,7 @@ int main(int argc, char *argv[]) {
                             / (double) INSTANCE_COUNT_PER_TREE;
 
                     double cd_tree_kappa = get_kappa(
-                            h_forest[forest_cd_tree_idx].confusion_matrix,
+                            h_tree_confusion_matrix + forest_cd_tree_idx * confusion_matrix_size,
                             CLASS_COUNT,
                             cd_tree_accuracy,
                             INSTANCE_COUNT_PER_TREE);
@@ -2049,7 +2053,7 @@ int main(int argc, char *argv[]) {
                     cout << "-----------------candidate kappa: " << cd_tree_kappa << endl;
                     cout << "---------candidate_tree_accuracy: " << cd_tree_accuracy << endl;
 
-                    if (cd_tree_kappa - drift_tree_kappa > 0.1) {
+                    if (cd_tree_kappa - drift_tree_kappa > 0.001) {
                         cout << "pick candidate tree" << endl;
                         forest_swap_tree_idx = forest_cd_tree_idx;
                         swap_tree_kappa = cd_tree_kappa;
@@ -2165,6 +2169,9 @@ int main(int argc, char *argv[]) {
                         GROWING_TREE_COUNT * sizeof(int), cudaMemcpyHostToDevice));
             gpuErrchk(cudaMemcpy(d_samples_seen_count, h_samples_seen_count,
                         GROWING_TREE_COUNT * LEAF_COUNT_PER_TREE * sizeof(int), cudaMemcpyHostToDevice));
+            // gpuErrchk(cudaMemcpy(d_tree_confusion_matrix, h_tree_confusion_matrix,
+            //             TREE_COUNT * confusion_matrix_size * sizeof(int),
+            //             cudaMemcpyHostToDevice));
 
             gpuErrchk(cudaMemcpy(d_tree_active_status, h_tree_active_status,
                         TREE_COUNT * sizeof(int), cudaMemcpyHostToDevice));
