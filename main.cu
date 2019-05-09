@@ -517,51 +517,36 @@ __global__ void compute_information_gain(
     int *cur_attribute_val_arr = attribute_val_arr + tree_idx * attribute_count_per_tree;
 
 
-    int col_idx = cur_attribute_val_arr[threadIdx.x / 2] * 2 + threadIdx.x % 2; // TODO expensive mod
+    int col_idx = cur_attribute_val_arr[threadIdx.x >> 1] * 2 + (threadIdx.x & 1);
 
     int a_ij = cur_leaf_counter[col_idx];
     int mask = cur_leaf_counter[leaf_counter_row_len + col_idx];
 
-    if (mask == 1) {
-        // sum up a column
-        float sum = 0.0;
+    // sum up a column
+    float sum = 0.0;
 
-        for (int i = 0; i < class_count; i++) {
-            int a_ijk = cur_leaf_counter[col_idx + (2 + i) * leaf_counter_row_len];
+    for (int i = 0; i < class_count; i++) {
+        int a_ijk = cur_leaf_counter[col_idx + (2 + i) * leaf_counter_row_len];
 
+        // 0/0 = inf
+        float param = (float) a_ijk / (a_ij * mask);
+        asm("max.f32 %0, %1, %2;" : "=f"(param) : "f"(param), "f"((float) 0.0));
 
-            // division by zero returns inf, only happens when mask is 0?
-            // float param = ((float) (a_ijk * mask) / (a_ij * mask)) * mask;
-            // asm("min.f32 %0, %1, %2;" : "=f"(param) : "f"(param), "f"((float) 0.0));
+        // log2(0) = -inf
+        float log_param = log2f((float) param);
+        asm("max.f32 %0, %1, %2;" : "=f"(log_param) : "f"(-log_param), "f"((float) 0.0));
 
-            // log2(0) returns -inf
-            // float log_param = log2f((float) param);
-            // asm("max.f32 %0, %1, %2;" : "=f"(log_param) : "f"(log_param), "f"((float) 0.0));
-            // sum += (param * log_param);
-
-
-            float param = 0.0;
-            if (a_ijk != 0) { // && a_ij != 0) {
-                param = (float) a_ijk / (float) a_ij;
-            }
-
-            float log_param = 0.0;
-            if (abs(param) > EPS) {
-                log_param = log(param);
-            }
-
-            sum += param * log_param;
-        }
-
-        cur_info_gain_vals[threadIdx.x] = -sum;
+        sum += param * log_param;
     }
+
+    cur_info_gain_vals[threadIdx.x] = sum;
 
     __syncthreads();
 
     float i_00 = 0.0, i_01 = 0.0;
     int i_idx = 0;
 
-    if (threadIdx.x % 2 == 0) {
+    if ((threadIdx.x & 1) == 0) {
         i_00 = cur_info_gain_vals[threadIdx.x];
         i_01 = cur_info_gain_vals[threadIdx.x + 1];
         i_idx = (threadIdx.x >> 1);
@@ -569,7 +554,7 @@ __global__ void compute_information_gain(
 
     __syncthreads();
 
-    if (threadIdx.x % 2 == 0) {
+    if ((threadIdx.x & 1) == 0) {
         cur_info_gain_vals[i_idx] = i_00 + i_01;
     }
 
