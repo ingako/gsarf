@@ -1473,8 +1473,7 @@ int main(int argc, char *argv[]) {
         }
 
         if (eof) {
-            log_file << "\ntraining completed" << endl;
-            break; // TODO
+            break;
         }
 
         log_file << endl << "=================iteration " << iter_count
@@ -1955,7 +1954,7 @@ int main(int argc, char *argv[]) {
 
             if (closest_state.size() != 0) {
                 int j = 0;
-                for (int i = 0; i < CPU_TREE_POOL_SIZE; i++) {
+                for (int i = 0; i < cur_tree_pool_size; i++) {
 
                     if (cur_state[i] == '1' && closest_state[i] == '0') {
                         // do nothing
@@ -1969,12 +1968,12 @@ int main(int argc, char *argv[]) {
                         // add candidate tree for warning tree
                         tree_memcpy(&cpu_forest[i], &h_forest[candidate_tree_forest_idx], false);
                         h_tree_active_status[candidate_tree_forest_idx] = 5;
+                        forest_idx_to_tree_id[candidate_tree_forest_idx] = i;
 
                         int* candidate_confusion_matrix = h_tree_confusion_matrix
                             + candidate_tree_forest_idx * confusion_matrix_size;
 
                         memset(candidate_confusion_matrix, 0, confusion_matrix_size * sizeof(int));
-
 
                     }
                 }
@@ -2082,7 +2081,7 @@ int main(int argc, char *argv[]) {
                     cout << "---------candidate_tree_accuracy: " << cd_tree_accuracy << endl;
 
                     if (cd_tree_kappa - drift_tree_kappa > 0.001) {
-                        cout << "picked candidate tree" << endl;
+                        cout << "------------picked candidate tree" << endl;
                         forest_swap_tree_idx = forest_cd_tree_idx;
                         swap_tree_kappa = cd_tree_kappa;
                     }
@@ -2131,6 +2130,7 @@ int main(int argc, char *argv[]) {
 
                 if (forest_swap_tree_idx == forest_bg_tree_idx) {
                     cout << "pick background tree" << endl;
+
                     // replace drift tree with its background tree
                     tree_memcpy(&h_forest[forest_bg_tree_idx], &h_forest[forest_tree_idx], true);
 
@@ -2266,6 +2266,7 @@ int main(int argc, char *argv[]) {
 
     log_file << "cur_tree_pool_size: " << cur_tree_pool_size << endl;
     log_file << "pattern matched: " << matched_pattern << endl;
+    log_file << "\ntraining completed" << endl;
 
 #if DEBUG
 
