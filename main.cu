@@ -22,7 +22,7 @@
 
 using namespace std;
 
-#define EPS 1e-5
+#define EPS 1e-10
 #define IS_BIT_SET(val, pos) (val & (1 << pos))
 
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
@@ -375,7 +375,6 @@ __global__ void tree_traversal(
 
     atomicAdd(&cur_forest_vote[predicted_class], 1);
 
-
     if (tree_idx != 0) {
         return;
     }
@@ -604,7 +603,7 @@ __global__ void compute_node_split_decisions(
         float delta,
         int leaf_count_per_tree,
         int* samples_seen_count) {
-    // <<<TREE_COUNT, INSTANCE_COUNT_PER_TREE>>>
+    // <<<TREE_COUNT, LEAF_COUNT_PER_TREE>>>
     // note: different from paper by using one thread per leaf
     // output: an array of decisions
     //         - the most significant bit denotes whether a leaf needs to be split
@@ -639,21 +638,40 @@ __global__ void compute_node_split_decisions(
         attribute_count_per_tree * 2;
     float *cur_info_gain_vals = info_gain_vals + cur_leaf_info_gain_start_pos;
 
-    thrust::sort_by_key(thrust::seq,
-            cur_info_gain_vals,
-            cur_info_gain_vals + attribute_count_per_tree,
-            cur_attribute_idx_arr);
+    // thrust::sort_by_key(thrust::seq,
+    //         cur_info_gain_vals,
+    //         cur_info_gain_vals + attribute_count_per_tree,
+    //         cur_attribute_idx_arr);
 
-    float first_best = cur_info_gain_vals[0];
-    float second_best = cur_info_gain_vals[1];
+
+    // iteration is faster than thrust parallel sort
+    int first_best_idx = 0;
+    float first_best_val = FLT_MAX;
+    float second_best_val = FLT_MAX;
+
+    for (int i = 0; i < attribute_count_per_tree; i++) {
+        if (first_best_val - cur_info_gain_vals[i] > EPS) {
+            second_best_val = first_best_val;
+            first_best_val = cur_info_gain_vals[i];
+
+            first_best_idx = cur_attribute_val_arr[i];
+
+        } else if (second_best_val - cur_info_gain_vals[i] > EPS) {
+            second_best_val = cur_info_gain_vals[i];
+        }
+    }
+
+    // float first_best_val = cur_info_gain_vals[0];
+    // float second_best_val = cur_info_gain_vals[1];
 
     float hoeffding_bound = compute_hoeffding_bound(r, delta, samples_seen_count[thread_pos]);
 
     int decision = 0;
-    if (fabs(first_best - second_best) > hoeffding_bound) {
+    if (second_best_val - first_best_val - hoeffding_bound > EPS) {
         // split on the best attribute
         decision |= (1 << 31);
-        decision |= cur_attribute_val_arr[cur_attribute_idx_arr[0]];
+        decision |= first_best_idx;
+        // decision |= cur_attribute_val_arr[cur_attribute_idx_arr[0]];
     }
 
     int* cur_node_split_decisions = node_split_decisions + tree_idx * leaf_count_per_tree;
@@ -2041,8 +2059,8 @@ int main(int argc, char *argv[]) {
                         fg_tree_accuracy,
                         INSTANCE_COUNT_PER_TREE);
 
-                cout << "--------------drift kappa: " << drift_tree_kappa << endl;
-                cout << "---------fg_tree_accuracy: " << fg_tree_accuracy << endl;
+                // cout << "--------------drift kappa: " << drift_tree_kappa << endl;
+                // cout << "---------fg_tree_accuracy: " << fg_tree_accuracy << endl;
 
                 int forest_swap_tree_idx = forest_tree_idx;
                 int swap_tree_kappa = drift_tree_kappa;
@@ -2059,8 +2077,8 @@ int main(int argc, char *argv[]) {
                                 bg_tree_accuracy,
                                 INSTANCE_COUNT_PER_TREE);
 
-                    cout << "-----------------bg kappa: " << bg_tree_kappa << endl;
-                    cout << "---------bg_tree_accuracy: " << bg_tree_accuracy << endl;
+                    // cout << "-----------------bg kappa: " << bg_tree_kappa << endl;
+                    // cout << "---------bg_tree_accuracy: " << bg_tree_accuracy << endl;
 
                     if (bg_tree_kappa - drift_tree_kappa > 0.01) {
                         forest_swap_tree_idx = forest_bg_tree_idx;
