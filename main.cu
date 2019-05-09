@@ -1283,7 +1283,7 @@ int main(int argc, char *argv[]) {
 
     // for swapping background trees when drift is detected
     state_graph* state_transition_graph = new state_graph(CPU_TREE_POOL_SIZE);
-    LRU_state* state_queue = new LRU_state(3, 0);
+    LRU_state* state_queue = new LRU_state(3, 10);
 
     // TODO
     // 0: inactive, 1: active, 2: must be inactive
@@ -1972,14 +1972,11 @@ int main(int argc, char *argv[]) {
 
                         int* candidate_confusion_matrix = h_tree_confusion_matrix
                             + candidate_tree_forest_idx * confusion_matrix_size;
+
                         memset(candidate_confusion_matrix, 0, confusion_matrix_size * sizeof(int));
 
 
-                    } else {
-                        cout << "error: wrong state transition" << endl;
-                        return 1;
                     }
-
                 }
             }
         }
@@ -2051,7 +2048,8 @@ int main(int argc, char *argv[]) {
                         - h_tree_error_count[forest_tree_idx])
                         / (double) INSTANCE_COUNT_PER_TREE;
 
-                int* cur_confusion_matrix = h_tree_confusion_matrix + forest_tree_idx * confusion_matrix_size;
+                int* cur_confusion_matrix = h_tree_confusion_matrix + forest_tree_idx
+                    * confusion_matrix_size;
 
                 double drift_tree_kappa = get_kappa(
                         cur_confusion_matrix,
@@ -2065,17 +2063,47 @@ int main(int argc, char *argv[]) {
                 int forest_swap_tree_idx = forest_tree_idx;
                 int swap_tree_kappa = drift_tree_kappa;
 
-                if (h_tree_active_status[forest_bg_tree_idx] == 3) {
+                if (h_tree_active_status[forest_cd_tree_idx] == 5) {
+
+                    double cd_tree_accuracy = (INSTANCE_COUNT_PER_TREE
+                            - h_tree_error_count[forest_cd_tree_idx])
+                            / (double) INSTANCE_COUNT_PER_TREE;
+
+                    int* cur_cd_tree_confusion_matrix = h_tree_confusion_matrix
+                        + forest_cd_tree_idx * confusion_matrix_size;
+
+                    double cd_tree_kappa = get_kappa(
+                            cur_cd_tree_confusion_matrix,
+                            CLASS_COUNT,
+                            cd_tree_accuracy,
+                            INSTANCE_COUNT_PER_TREE);
+
+                    cout << "-----------------candidate kappa: " << cd_tree_kappa << endl;
+                    cout << "---------candidate_tree_accuracy: " << cd_tree_accuracy << endl;
+
+                    if (cd_tree_kappa - drift_tree_kappa > 0.001) {
+                        cout << "picked candidate tree" << endl;
+                        forest_swap_tree_idx = forest_cd_tree_idx;
+                        swap_tree_kappa = cd_tree_kappa;
+                    }
+                    h_tree_active_status[forest_cd_tree_idx] = 4;
+                }
+
+                if (forest_swap_tree_idx == forest_tree_idx
+                        && h_tree_active_status[forest_bg_tree_idx] == 3) {
 
                     double bg_tree_accuracy = (INSTANCE_COUNT_PER_TREE
                                 - h_tree_error_count[forest_bg_tree_idx])
                                 / (double) INSTANCE_COUNT_PER_TREE;
 
+                    int* cur_bg_tree_confusion_matrix = h_tree_confusion_matrix
+                        + forest_bg_tree_idx * confusion_matrix_size;
+
                     double bg_tree_kappa = get_kappa(
-                                h_tree_confusion_matrix + forest_bg_tree_idx * confusion_matrix_size,
-                                CLASS_COUNT,
-                                bg_tree_accuracy,
-                                INSTANCE_COUNT_PER_TREE);
+                            cur_bg_tree_confusion_matrix,
+                            CLASS_COUNT,
+                            bg_tree_accuracy,
+                            INSTANCE_COUNT_PER_TREE);
 
                     // cout << "-----------------bg kappa: " << bg_tree_kappa << endl;
                     // cout << "---------bg_tree_accuracy: " << bg_tree_accuracy << endl;
@@ -2086,30 +2114,6 @@ int main(int argc, char *argv[]) {
                     }
                     h_tree_active_status[forest_bg_tree_idx] = 2;
                 }
-
-                if (h_tree_active_status[forest_cd_tree_idx] == 5) {
-
-                    double cd_tree_accuracy = (INSTANCE_COUNT_PER_TREE
-                            - h_tree_error_count[forest_cd_tree_idx])
-                            / (double) INSTANCE_COUNT_PER_TREE;
-
-                    double cd_tree_kappa = get_kappa(
-                            h_tree_confusion_matrix + forest_cd_tree_idx * confusion_matrix_size,
-                            CLASS_COUNT,
-                            cd_tree_accuracy,
-                            INSTANCE_COUNT_PER_TREE);
-
-                    cout << "-----------------candidate kappa: " << cd_tree_kappa << endl;
-                    cout << "---------candidate_tree_accuracy: " << cd_tree_accuracy << endl;
-
-                    if (cd_tree_kappa - drift_tree_kappa > 0.001) {
-                        cout << "pick candidate tree" << endl;
-                        forest_swap_tree_idx = forest_cd_tree_idx;
-                        swap_tree_kappa = cd_tree_kappa;
-                    }
-                    h_tree_active_status[forest_cd_tree_idx] = 4;
-                }
-
 
 #if DEBUG
 
