@@ -991,7 +991,7 @@ int main(int argc, char *argv[]) {
     }
 
     // CPU tree pool allocations
-    int CPU_TREE_POOL_SIZE = TREE_COUNT * 20;
+    int CPU_TREE_POOL_SIZE = TREE_COUNT * 5;
     int cur_tree_pool_size = FOREGROUND_TREE_COUNT;
 
     allocated = malloc(CPU_TREE_POOL_SIZE * NODE_COUNT_PER_TREE * sizeof(int));
@@ -1014,13 +1014,14 @@ int main(int argc, char *argv[]) {
     }
 
     int* forest_idx_to_tree_id = (int*) malloc(TREE_COUNT * sizeof(int));
+    memset(forest_idx_to_tree_id, -1, TREE_COUNT * sizeof(int));
+
+    int* tree_id_to_forest_idx = (int*) malloc(CPU_TREE_POOL_SIZE * sizeof(int));
+    memset(tree_id_to_forest_idx, -1, CPU_TREE_POOL_SIZE * sizeof(int));
 
     for (int i = 0; i < FOREGROUND_TREE_COUNT; i++) {
         forest_idx_to_tree_id[i] = i;
-    }
-
-    for (int i = FOREGROUND_TREE_COUNT; i < TREE_COUNT; i++) {
-        forest_idx_to_tree_id[i] = -1;
+        tree_id_to_forest_idx[i] = i;
     }
 
     gpuErrchk(cudaMemcpy(d_decision_trees, h_decision_trees, NODE_COUNT_PER_TREE * TREE_COUNT
@@ -1283,7 +1284,7 @@ int main(int argc, char *argv[]) {
 
     // for swapping background trees when drift is detected
     state_graph* state_transition_graph = new state_graph(CPU_TREE_POOL_SIZE);
-    LRU_state* state_queue = new LRU_state(3, 10);
+    LRU_state* state_queue = new LRU_state(100, 50);
 
     // TODO
     // 0: inactive, 1: active, 2: must be inactive
@@ -1831,7 +1832,6 @@ int main(int argc, char *argv[]) {
 
             // warning detected
             if (error_change) {
-                // warning_detector->resetChange();
                 warning_detectors[tree_idx] = new ADWIN((double) 0.001);
 
                 // grow background tree
@@ -1866,8 +1866,6 @@ int main(int argc, char *argv[]) {
             // drift detected
             warning_detectors[tree_idx] = new ADWIN((double) 0.001);
             drift_detectors[tree_idx] = new ADWIN((double) 0.00001);
-            // warning_detector->resetChange();
-            // drift_detector->resetChange();
 
             h_drift_tree_idx_arr[drift_tree_count] = tree_idx;
             drift_tree_count++;
@@ -1956,19 +1954,34 @@ int main(int argc, char *argv[]) {
                 int j = 0;
                 for (int i = 0; i < cur_tree_pool_size; i++) {
 
+                    if (j >= warning_tree_count) {
+                        break;
+                    }
+
+                    if (tree_id_to_forest_idx[i] == -1) {
+                        continue;
+                    }
+
                     if (cur_state[i] == '1' && closest_state[i] == '0') {
                         // do nothing
 
                     } else if (cur_state[i] == '0' && closest_state[i] == '1') {
+
                         int warning_tree_forest_idx = h_warning_tree_idx_arr[j];
                         int candidate_tree_forest_idx = warning_tree_forest_idx
                             + GROWING_TREE_COUNT;
                         j++;
 
                         // add candidate tree for warning tree
+
+                        cout << "add candidate tree for warning tree" << endl;
+                        cout << "cpu_forest_id: " << i << endl;
+                        cout << "candidate_tree_forest_idx: " << candidate_tree_forest_idx << endl;
+
                         tree_memcpy(&cpu_forest[i], &h_forest[candidate_tree_forest_idx], false);
                         h_tree_active_status[candidate_tree_forest_idx] = 5;
                         forest_idx_to_tree_id[candidate_tree_forest_idx] = i;
+                        tree_id_to_forest_idx[i] = candidate_tree_forest_idx;
 
                         int* candidate_confusion_matrix = h_tree_confusion_matrix
                             + candidate_tree_forest_idx * confusion_matrix_size;
@@ -2042,6 +2055,15 @@ int main(int argc, char *argv[]) {
                 int forest_bg_tree_idx = forest_tree_idx + FOREGROUND_TREE_COUNT;
                 int forest_cd_tree_idx = forest_tree_idx + GROWING_TREE_COUNT;
                 int cd_tree_id = forest_idx_to_tree_id[forest_cd_tree_idx];
+
+                cout << endl;
+                cout << "drift tree switch------" << endl;
+                cout << "tree_id: " << tree_id << endl;
+                cout << "forest_tree_idx: " << forest_tree_idx << endl;
+                cout << "forest_bg_tree_idx: " << forest_bg_tree_idx << endl;
+                cout << "forest_cd_tree_idx: " << forest_cd_tree_idx << endl;
+                cout << "cd_tree_id: " << cd_tree_id << endl;
+                cout << endl;
 
                 double fg_tree_accuracy = (INSTANCE_COUNT_PER_TREE
                         - h_tree_error_count[forest_tree_idx])
@@ -2222,9 +2244,6 @@ int main(int argc, char *argv[]) {
                         GROWING_TREE_COUNT * sizeof(int), cudaMemcpyHostToDevice));
             gpuErrchk(cudaMemcpy(d_samples_seen_count, h_samples_seen_count,
                         GROWING_TREE_COUNT * LEAF_COUNT_PER_TREE * sizeof(int), cudaMemcpyHostToDevice));
-            // gpuErrchk(cudaMemcpy(d_tree_confusion_matrix, h_tree_confusion_matrix,
-            //             TREE_COUNT * confusion_matrix_size * sizeof(int),
-            //             cudaMemcpyHostToDevice));
 
             gpuErrchk(cudaMemcpy(d_tree_active_status, h_tree_active_status,
                         TREE_COUNT * sizeof(int), cudaMemcpyHostToDevice));
@@ -2241,6 +2260,7 @@ int main(int argc, char *argv[]) {
 
             gpuErrchk(cudaMemcpy(d_drift_tree_idx_arr, h_drift_tree_idx_arr,
                         drift_tree_count * sizeof(int), cudaMemcpyHostToDevice));
+
             reset_tree<<<1, drift_tree_count>>>(
                     d_drift_tree_idx_arr,
                     d_decision_trees,
