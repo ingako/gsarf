@@ -864,13 +864,17 @@ int main(int argc, char *argv[]) {
     int TREE_DEPTH_PARAM = -1;
     int INSTANCE_COUNT_PER_TREE = 200;
     int SAMPLE_FREQUENCY = 1000;
+
+
     float n_min = 50; // hoeffding bound parameter, grace_period
+    double kappa_threshold = 0.1;
+    int edit_distance_threshold = 50;
 
     string data_path = "data/covtype";
     string data_file_name = "covtype_binary_attributes.csv";
 
     int opt;
-    while ((opt = getopt(argc, argv, "t:i:p:n:s:d:g:r")) != -1) {
+    while ((opt = getopt(argc, argv, "t:i:p:n:s:d:g:k:e:r")) != -1) {
         switch (opt) {
             case 't':
                 TREE_COUNT = atoi(optarg);
@@ -893,6 +897,12 @@ int main(int argc, char *argv[]) {
             case 'g':
                 n_min = atoi(optarg);
                 break;
+            case 'k':
+                kappa_threshold = atof(optarg);
+                break;
+            case 'e':
+                edit_distance_threshold = atoi(optarg);
+                break;
             case 'r':
                 // Use a different seed value for each run
                 srand(time(NULL));
@@ -908,8 +918,11 @@ int main(int argc, char *argv[]) {
     log_file.open("log_file.txt");
 
     log_file << "TREE_COUNT = " << TREE_COUNT << endl
+        << "GROWING_TREE_COUNT = " << GROWING_TREE_COUNT << endl
         << "INSTANCE_COUNT_PER_TREE = " << INSTANCE_COUNT_PER_TREE << endl;
 
+    log_file << "edit_distance_threshold: " << edit_distance_threshold << endl
+        << "kappa_threshold: " << endl;
 
     string output_path = data_path + "/result_gpu.csv";
     ofstream output_file;
@@ -1307,7 +1320,7 @@ int main(int argc, char *argv[]) {
 
     // for swapping background trees when drift is detected
     state_graph* state_transition_graph = new state_graph(CPU_TREE_POOL_SIZE);
-    LRU_state* state_queue = new LRU_state(100, 50);
+    LRU_state* state_queue = new LRU_state(100, edit_distance_threshold);
 
     // TODO
     // 0: inactive, 1: active, 2: must be inactive
@@ -2166,7 +2179,7 @@ int main(int argc, char *argv[]) {
                     candidate_t best_candidate =
                         forest_candidate_vec_copy[forest_candidate_vec_copy.size() - 1];
 
-                    if (best_candidate.kappa - drift_tree_kappa > 0.1) {
+                    if (best_candidate.kappa - drift_tree_kappa > kappa_threshold) {
                         forest_swap_tree_idx = best_candidate.tree_id;
                         cout << "------------picked candidate tree: "
                             << best_candidate.tree_id << endl;
