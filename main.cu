@@ -22,7 +22,7 @@
 
 using namespace std;
 
-#define EPS 1e-10
+#define EPS 1e-9
 #define IS_BIT_SET(val, pos) (val & (1 << pos))
 
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
@@ -626,7 +626,7 @@ __global__ void compute_node_split_decisions(
         float delta,
         int leaf_count_per_tree,
         int* samples_seen_count) {
-    // <<<TREE_COUNT, LEAF_COUNT_PER_TREE>>>
+    // <<<GROWING_TREE_COUNT, LEAF_COUNT_PER_TREE>>>
     // note: different from paper by using one thread per leaf
     // output: an array of decisions
     //         - the most significant bit denotes whether a leaf needs to be split
@@ -661,28 +661,11 @@ __global__ void compute_node_split_decisions(
         attribute_count_per_tree * 2;
     float *cur_info_gain_vals = info_gain_vals + cur_leaf_info_gain_start_pos;
 
+
     thrust::sort_by_key(thrust::seq,
             cur_info_gain_vals,
             cur_info_gain_vals + attribute_count_per_tree,
             cur_attribute_idx_arr);
-
-
-    // iteration is faster than thrust parallel sort
-    // int first_best_idx = 0;
-    // float first_best_val = FLT_MAX;
-    // float second_best_val = FLT_MAX;
-
-    // for (int i = 0; i < attribute_count_per_tree; i++) {
-    //     if (first_best_val - cur_info_gain_vals[i] > EPS) {
-    //         second_best_val = first_best_val;
-    //         first_best_val = cur_info_gain_vals[i];
-
-    //         first_best_idx = cur_attribute_val_arr[i];
-
-    //     } else if (second_best_val - cur_info_gain_vals[i] > EPS) {
-    //         second_best_val = cur_info_gain_vals[i];
-    //     }
-    // }
 
     float first_best_val = cur_info_gain_vals[0];
     float second_best_val = cur_info_gain_vals[1];
@@ -693,7 +676,6 @@ __global__ void compute_node_split_decisions(
     if (second_best_val - first_best_val - hoeffding_bound > EPS) {
         // split on the best attribute
         decision |= (1 << 31);
-        // decision |= first_best_idx;
         decision |= cur_attribute_val_arr[cur_attribute_idx_arr[0]];
     }
 
@@ -718,7 +700,7 @@ __global__ void node_split(
         int attribute_count_per_tree,
         int attribute_count_total,
         int class_count) {
-    // <<<1, TREE_COUNT>>>
+    // <<<1, GROWING_TREE_COUNT>>>
     // only launch one thread for each tree
     // to append new leaves at the end of the decision_tree array sequentially
 
@@ -869,13 +851,17 @@ int main(int argc, char *argv[]) {
     float n_min = 50; // hoeffding bound parameter, grace_period
     double kappa_threshold = 0.1;
     int edit_distance_threshold = 50;
+    bool STATE_ADAPTIVE = false;
 
     string data_path = "data/covtype";
     string data_file_name = "covtype_binary_attributes.csv";
 
     int opt;
-    while ((opt = getopt(argc, argv, "t:i:p:n:s:d:g:k:e:r")) != -1) {
+    while ((opt = getopt(argc, argv, "t:i:p:n:s:d:g:k:e:rc")) != -1) {
         switch (opt) {
+            case 'c':
+                STATE_ADAPTIVE = true;
+                break;
             case 't':
                 TREE_COUNT = atoi(optarg);
                 break;
@@ -922,9 +908,18 @@ int main(int argc, char *argv[]) {
         << "INSTANCE_COUNT_PER_TREE = " << INSTANCE_COUNT_PER_TREE << endl;
 
     log_file << "edit_distance_threshold: " << edit_distance_threshold << endl
-        << "kappa_threshold: " << endl;
+        << "kappa_threshold: " << kappa_threshold << endl;
 
-    string output_path = data_path + "/result_gpu.csv";
+    size_t lastindex = data_file_name.find_last_of(".");
+    string output_path = data_path + "/result_gpu_";
+
+    if (!STATE_ADAPTIVE) {
+        output_path += "bg_";
+    }
+
+    output_path += data_file_name.substr(0, lastindex) + ".csv";
+
+    // string output_path = data_path + "/result_gpu.csv";
     ofstream output_file;
     output_file.open(output_path);
 
@@ -1027,7 +1022,7 @@ int main(int argc, char *argv[]) {
     }
 
     // CPU tree pool allocations
-    int CPU_TREE_POOL_SIZE = TREE_COUNT * 10;
+    int CPU_TREE_POOL_SIZE = FOREGROUND_TREE_COUNT * 20;
     int cur_tree_pool_size = FOREGROUND_TREE_COUNT;
 
     allocated = malloc(CPU_TREE_POOL_SIZE * NODE_COUNT_PER_TREE * sizeof(int));
@@ -1378,7 +1373,7 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < TREE_COUNT; i++) {
         cout << h_tree_active_status[i] << " ";
     }
-    cout << endl;;
+    cout << endl;
 
 #endif
 
@@ -1879,7 +1874,9 @@ int main(int argc, char *argv[]) {
                     h_tree_active_status[bg_tree_pos] = 3;
                 }
 
-                target_state[forest_idx_to_tree_id[tree_idx]] = '2';
+                if (STATE_ADAPTIVE) {
+                    target_state[forest_idx_to_tree_id[tree_idx]] = '2';
+                }
                 warning_tree_id_list.push_back(forest_idx_to_tree_id[tree_idx]);
 
                 h_warning_tree_idx_arr[warning_tree_count] = tree_idx;
@@ -1969,7 +1966,7 @@ int main(int argc, char *argv[]) {
         }
 
 
-        if (warning_tree_count > 0) {
+        if (STATE_ADAPTIVE && warning_tree_count > 0) {
             vector<char> closest_state;
             if  (state_transition_graph->is_stable) {
                 closest_state = target_state;
@@ -2099,11 +2096,8 @@ int main(int argc, char *argv[]) {
 
 #endif
 
-            // calculate all kappa
-            vector<candidate_t> forest_candidate_vec_copy = forest_candidate_vec;
-
-            for (int i = 0; i < forest_candidate_vec_copy.size(); i++) {
-                candidate_t candidate = forest_candidate_vec_copy[i];
+            for (int i = 0; i < forest_candidate_vec.size(); i++) {
+                candidate_t candidate = forest_candidate_vec[i];
 
                 double accuracy = (INSTANCE_COUNT_PER_TREE
                         - h_tree_error_count[candidate.forest_idx])
@@ -2112,14 +2106,14 @@ int main(int argc, char *argv[]) {
                 int* cur_confusion_matrix = h_tree_confusion_matrix + candidate.forest_idx
                     * confusion_matrix_size;
 
-                forest_candidate_vec_copy[i].kappa = get_kappa(
+                forest_candidate_vec[i].kappa = get_kappa(
                         cur_confusion_matrix,
                         CLASS_COUNT,
                         accuracy,
                         INSTANCE_COUNT_PER_TREE);
             }
 
-            sort(forest_candidate_vec_copy.begin(), forest_candidate_vec_copy.end());
+            sort(forest_candidate_vec.begin(), forest_candidate_vec.end());
 
             vector<char> next_state(cur_state);
 
@@ -2167,23 +2161,15 @@ int main(int argc, char *argv[]) {
                         fg_tree_accuracy,
                         INSTANCE_COUNT_PER_TREE);
 
-                // cout << "--------------drift kappa: " << drift_tree_kappa << endl;
-                // cout << "---------fg_tree_accuracy: " << fg_tree_accuracy << endl;
-
                 int forest_swap_tree_idx = forest_tree_idx;
 
-                if (forest_candidate_vec_copy.size() > 0) {
-                    // cout << "-----------------candidate kappa: " << cd_tree_kappa << endl;
-                    // cout << "---------candidate_tree_accuracy: " << cd_tree_accuracy << endl;
+                if (STATE_ADAPTIVE && forest_candidate_vec.size() > 0) {
 
                     candidate_t best_candidate =
-                        forest_candidate_vec_copy[forest_candidate_vec_copy.size() - 1];
+                        forest_candidate_vec[forest_candidate_vec.size() - 1];
 
                     if (best_candidate.kappa - drift_tree_kappa > kappa_threshold) {
                         forest_swap_tree_idx = best_candidate.tree_id;
-                        cout << "------------picked candidate tree: "
-                            << best_candidate.tree_id << endl;
-
 
 #if DEBUG
                         cout << "best_candiate.tree_id: " << best_candidate.tree_id << endl;
@@ -2196,6 +2182,8 @@ int main(int argc, char *argv[]) {
                     }
                 }
 
+
+                bool add_bg_tree = false;
                 if (forest_swap_tree_idx == forest_tree_idx
                         && h_tree_active_status[forest_bg_tree_idx] == 3) {
 
@@ -2212,11 +2200,9 @@ int main(int argc, char *argv[]) {
                             bg_tree_accuracy,
                             INSTANCE_COUNT_PER_TREE);
 
-                    // cout << "-----------------bg kappa: " << bg_tree_kappa << endl;
-                    // cout << "---------bg_tree_accuracy: " << bg_tree_accuracy << endl;
-
-                    if (bg_tree_kappa - drift_tree_kappa > 0.01) {
-                        forest_swap_tree_idx = -1;
+                    forest_swap_tree_idx = -1;
+                    if (fabs(bg_tree_kappa - drift_tree_kappa) > 0.01) {
+                        add_bg_tree = true;
                     }
                 }
                 h_tree_active_status[forest_bg_tree_idx] = 2;
@@ -2226,10 +2212,12 @@ int main(int argc, char *argv[]) {
                     continue;
                 }
 
+
                 // put drift tree back to cpu tree pool
                 tree_memcpy(&h_forest[forest_tree_idx], &cpu_forest[tree_id], true);
+
                 tree_id_to_forest_idx[tree_id] = -1;
-                forest_idx_to_tree_id[forest_tree_idx] = -1;
+                // forest_idx_to_tree_id[forest_tree_idx] = -1;
 
                 if (forest_swap_tree_idx == -1) {
                     cout << "pick background tree" << endl;
@@ -2237,33 +2225,42 @@ int main(int argc, char *argv[]) {
                     // replace drift tree with its background tree
                     tree_memcpy(&h_forest[forest_bg_tree_idx], &h_forest[forest_tree_idx], true);
 
-                    // add background tree to cpu_tree_pool
-                    int new_tree_id = cur_tree_pool_size;
-                    tree_memcpy(&h_forest[forest_bg_tree_idx], &cpu_forest[new_tree_id], true);
+                    if (add_bg_tree) {
+                        // add background tree to cpu_tree_pool
+                        int new_tree_id = cur_tree_pool_size;
+                        tree_memcpy(&h_forest[forest_bg_tree_idx], &cpu_forest[new_tree_id], true);
+                        forest_idx_to_tree_id[forest_tree_idx] = new_tree_id;
+                        tree_id_to_forest_idx[new_tree_id] = forest_tree_idx;
 
-                    forest_idx_to_tree_id[forest_tree_idx] = new_tree_id;
-                    tree_id_to_forest_idx[new_tree_id] = forest_tree_idx;
+                        next_state[new_tree_id] = '1';
+                        next_state[tree_id] = '0';
 
-                    next_state[new_tree_id] = '1';
-                    next_state[tree_id] = '0';
+                        cur_tree_pool_size++;
 
-                    cur_tree_pool_size++;
+                        cur_state = next_state;
+                        state_queue->enqueue(cur_state);
+                        state_queue->to_string();
+                    }
+
 
                 } else {
 
                     // find the best candidate and replace it with drift tree
 
                     candidate_t best_candidate =
-                        forest_candidate_vec_copy[forest_candidate_vec_copy.size() - 1];
+                        forest_candidate_vec[forest_candidate_vec.size() - 1];
 
-                    if (best_candidate.tree_id < 0 || best_candidate.tree_id >=
-                            CPU_TREE_POOL_SIZE) {
+                    cout << "------------picked candidate tree: "
+                        << best_candidate.tree_id << endl;
+
+                    if (best_candidate.tree_id < 0
+                            || best_candidate.tree_id >= CPU_TREE_POOL_SIZE) {
                         cout << "incorrect best_candidate.tree_id" << endl;
                         return 1;
                     }
 
-                    if (best_candidate.forest_idx < GROWING_TREE_COUNT || best_candidate.forest_idx >=
-                            TREE_COUNT) {
+                    if (best_candidate.forest_idx < GROWING_TREE_COUNT
+                            || best_candidate.forest_idx >= TREE_COUNT) {
                         cout << "incorrect best_candidate.forest_idx" << endl;
                         return 1;
                     }
@@ -2288,21 +2285,12 @@ int main(int argc, char *argv[]) {
                     next_state[tree_id] = '0';
 
 
-                    cout << "----------------->forest_candidate_vec: ";
-                    for (int i = 0; i < forest_candidate_vec.size(); i++) {
-                        cout << forest_candidate_vec[i].tree_id << ",";
-                    }
-                    cout << endl;
-                    for (int i = 0; i < forest_candidate_vec.size(); i++) {
-                        if (forest_candidate_vec[i].tree_id == best_candidate.tree_id) {
-                            next_empty_forest_idx.push(forest_candidate_vec[i].forest_idx);
-                            forest_candidate_vec.erase(forest_candidate_vec.begin() + i);
-                            break;
-                        }
-                    }
+                    forest_candidate_vec.erase(forest_candidate_vec.begin()
+                            + forest_candidate_vec.size() - 1);
 
-                    forest_candidate_vec_copy.erase(forest_candidate_vec_copy.begin()
-                            + forest_candidate_vec_copy.size() - 1);
+                    cur_state = next_state;
+                    state_queue->enqueue(cur_state);
+                    state_queue->to_string();
                 }
 
             }
@@ -2354,9 +2342,6 @@ int main(int argc, char *argv[]) {
 
 #endif
 
-            cur_state = next_state;
-            state_queue->enqueue(cur_state);
-            state_queue->to_string();
         }
 
 
