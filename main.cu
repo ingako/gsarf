@@ -673,7 +673,8 @@ __global__ void compute_node_split_decisions(
     float hoeffding_bound = compute_hoeffding_bound(r, delta, samples_seen_count[thread_pos]);
 
     int decision = 0;
-    if (second_best_val - first_best_val - hoeffding_bound > EPS) {
+
+    if (fabs(fabs(second_best_val - first_best_val) - hoeffding_bound) > EPS) {
         // split on the best attribute
         decision |= (1 << 31);
         decision |= cur_attribute_val_arr[cur_attribute_idx_arr[0]];
@@ -732,20 +733,19 @@ __global__ void node_split(
 
     int *cur_attribute_val_arr = attribute_val_arr + tree_idx * attribute_count_per_tree;
 
-    for (int leaf_idx = 0; leaf_idx < max_leaf_count_per_tree; leaf_idx++) {
-        unsigned int decision = cur_node_split_decisions[leaf_idx];
+    int prev_leaf_count_per_tree = cur_leaf_count_per_tree[tree_idx];
+    for (int leaf_idx = 0; leaf_idx < prev_leaf_count_per_tree; leaf_idx++) {
+        int decision = cur_node_split_decisions[leaf_idx];
 
         if (!IS_BIT_SET(decision, 31)) {
             continue;
         }
 
-        cur_node_split_decisions[leaf_idx] = 0;
-
         int *cur_leaf_counter = cur_tree_leaf_counters + leaf_idx * counter_size_per_leaf;
 
         if (cur_node_count == max_node_count_per_tree) {
             // tree is full
-            return;
+            break;
         }
 
         int attribute_id = (decision & ~(1 << 31));
@@ -767,6 +767,9 @@ __global__ void node_split(
                 || right_leaf_pos >= max_node_count_per_tree) {
             continue;
         }
+
+        // printf("tree:%i  left_leaf_pos:%i   max_node_count_per_tree:%i\n", tree_idx, leaf_leaf_pos,
+        //         max_node_count_per_tree);
 
         cur_decision_tree[cur_leaf_pos_in_tree] = attribute_id;
         // cur_decision_tree[cur_leaf_pos_in_tree] = cur_attribute_val_arr[attribute_id];
@@ -1022,7 +1025,7 @@ int main(int argc, char *argv[]) {
     }
 
     // CPU tree pool allocations
-    int CPU_TREE_POOL_SIZE = FOREGROUND_TREE_COUNT * 20;
+    int CPU_TREE_POOL_SIZE = FOREGROUND_TREE_COUNT * 40;
     int cur_tree_pool_size = FOREGROUND_TREE_COUNT;
 
     allocated = malloc(CPU_TREE_POOL_SIZE * NODE_COUNT_PER_TREE * sizeof(int));
@@ -2368,7 +2371,6 @@ int main(int argc, char *argv[]) {
 
         if (drift_tree_count > 0) {
 
-            // TODO reset background trees only
             for (int i = 0; i < drift_tree_count; i++) {
                 int bg_tree_forest_idx = h_drift_tree_idx_arr[i] + FOREGROUND_TREE_COUNT;
                 h_drift_tree_idx_arr[i] = bg_tree_forest_idx;
