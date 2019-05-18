@@ -742,8 +742,6 @@ __global__ void node_split(
     int *cur_leaf_back = leaf_back + tree_idx * max_leaf_count_per_tree;
     int *cur_leaf_class = leaf_class + tree_idx * max_leaf_count_per_tree;
 
-    int *cur_attribute_val_arr = attribute_val_arr + tree_idx * attribute_count_per_tree;
-
     int prev_leaf_count_per_tree = cur_leaf_count_per_tree[tree_idx];
     for (int leaf_idx = 0; leaf_idx < prev_leaf_count_per_tree; leaf_idx++) {
         if (cur_node_count == max_node_count_per_tree) {
@@ -1324,9 +1322,6 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // pointer to the start of the background decision trees
-    int *h_background_trees = h_decision_trees + FOREGROUND_TREE_COUNT * NODE_COUNT_PER_TREE;
-
 
     // for swapping background trees when drift is detected
     state_graph* state_transition_graph = new state_graph(CPU_TREE_POOL_SIZE);
@@ -1408,10 +1403,6 @@ int main(int argc, char *argv[]) {
                 TREE_COUNT * confusion_matrix_size)) {
         return 1;
     }
-
-    int *h_tree_accuracy = (int*) malloc(TREE_COUNT * sizeof(int));
-    int *d_tree_accuracy;
-
 
     vector<tree_t> h_forest;
     for (int tree_idx = 0; tree_idx < TREE_COUNT; tree_idx++) {
