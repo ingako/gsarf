@@ -1398,7 +1398,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    in *h_tree_confusion_matrix = (int*) malloc(TREE_COUNT * confusion_matrix_size * sizeof(int));
+    int *h_tree_confusion_matrix = (int*) malloc(TREE_COUNT * confusion_matrix_size * sizeof(int));
     int *d_tree_confusion_matrix;
     if (!allocate_memory_on_device(&d_tree_confusion_matrix, "d_tree_confusion_matrix",
                 TREE_COUNT * confusion_matrix_size)) {
