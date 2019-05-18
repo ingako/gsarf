@@ -2018,11 +2018,12 @@ int main(int argc, char *argv[]) {
                     } else if (cur_state[i] == '0' && closest_state[i] == '1') {
 
                         int next_avail_forest_idx;
-                        if (next_empty_forest_idx.size() == 0) {
+                        if (next_empty_forest_idx.empty()) {
                             cout << "no next empty forest_idx" << endl;
 
                             candidate_t lru_candidate = forest_candidate_vec[0];
                             next_avail_forest_idx = lru_candidate.forest_idx;
+                            tree_id_to_forest_idx[lru_candidate.tree_id] = -1;
 
                             forest_candidate_vec.erase(forest_candidate_vec.begin());
 
