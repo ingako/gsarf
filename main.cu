@@ -96,7 +96,7 @@ double get_kappa(int *confusion_matrix, int class_count, double accuracy, int sa
 
         double col_sum = 0;
         for (int j = 0; j < row_count; j++) {
-            col_sum += confusion_matrix[i * row_count + j];
+            col_sum += confusion_matrix[j * row_count + i];
         }
 
         pc += (row_sum / sample_count) * (col_sum / sample_count);
@@ -1312,13 +1312,13 @@ int main(int argc, char *argv[]) {
 
     int* d_drift_tree_idx_arr;
     if (!allocate_memory_on_device(&d_drift_tree_idx_arr, "drift_tree_idx_arr",
-                GROWING_TREE_COUNT)) {
+                FOREGROUND_TREE_COUNT)) {
         return 1;
     }
 
     int* d_warning_tree_idx_arr;
     if (!allocate_memory_on_device(&d_warning_tree_idx_arr, "warning_tree_idx_arr",
-                GROWING_TREE_COUNT)) {
+                FOREGROUND_TREE_COUNT)) {
         return 1;
     }
 
@@ -1390,14 +1390,15 @@ int main(int argc, char *argv[]) {
 
     // for calculating kappa measurements
     int confusion_matrix_size = CLASS_COUNT * CLASS_COUNT;
-    int *h_confusion_matrix = (int*) malloc(confusion_matrix_size * sizeof(int));
+    int* h_confusion_matrix = (int*) malloc(confusion_matrix_size * sizeof(int));
+
     int *d_confusion_matrix;
     if (!allocate_memory_on_device(&d_confusion_matrix, "d_confusion_matrix",
                 confusion_matrix_size)) {
         return 1;
     }
 
-    int *h_tree_confusion_matrix = (int*) malloc(TREE_COUNT * confusion_matrix_size * sizeof(int));
+    in *h_tree_confusion_matrix = (int*) malloc(TREE_COUNT * confusion_matrix_size * sizeof(int));
     int *d_tree_confusion_matrix;
     if (!allocate_memory_on_device(&d_tree_confusion_matrix, "d_tree_confusion_matrix",
                 TREE_COUNT * confusion_matrix_size)) {
