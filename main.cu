@@ -1935,8 +1935,8 @@ int main(int argc, char *argv[]) {
             for (int i = 0; i < warning_tree_count; i++) {
                 cout << h_warning_tree_idx_arr[i] << " ";
             }
-
             cout << endl;
+
             // reset background trees
             gpuErrchk(cudaMemcpy(d_warning_tree_idx_arr, h_warning_tree_bg_idx_arr,
                         warning_tree_count * sizeof(int), cudaMemcpyHostToDevice));
@@ -2004,6 +2004,7 @@ int main(int argc, char *argv[]) {
             cout << "get_closest_state: " << closest_state_str << endl;
 
             if (closest_state.size() != 0) {
+
                 for (int i = 0; i < cur_tree_pool_size; i++) {
 
                     if (tree_id_to_forest_idx[i] != -1) {
@@ -2016,7 +2017,6 @@ int main(int argc, char *argv[]) {
 
                     } else if (cur_state[i] == '0' && closest_state[i] == '1') {
 
-
                         int next_avail_forest_idx;
                         if (next_empty_forest_idx.size() == 0) {
                             cout << "no next empty forest_idx" << endl;
@@ -2024,8 +2024,7 @@ int main(int argc, char *argv[]) {
                             candidate_t lru_candidate = forest_candidate_vec[0];
                             next_avail_forest_idx = lru_candidate.forest_idx;
 
-                            forest_candidate_vec.erase(forest_candidate_vec.begin(),
-                                    forest_candidate_vec.begin() + 1);
+                            forest_candidate_vec.erase(forest_candidate_vec.begin());
 
                         } else {
                             next_avail_forest_idx = next_empty_forest_idx.front();
@@ -2046,7 +2045,9 @@ int main(int argc, char *argv[]) {
                         candidate_t candidate = candidate_t(i, next_avail_forest_idx);
                         forest_candidate_vec.push_back(candidate);
 
-                        tree_memcpy(&cpu_forest[i], &h_forest[next_avail_forest_idx], false);
+                        tree_memcpy(&cpu_forest[i], &h_forest[next_avail_forest_idx],
+                                false);
+
                         h_tree_active_status[next_avail_forest_idx] = 5;
                         forest_idx_to_tree_id[next_avail_forest_idx] = i;
                         tree_id_to_forest_idx[i] = next_avail_forest_idx;
@@ -2263,9 +2264,12 @@ int main(int argc, char *argv[]) {
                 } else {
 
                     // find the best candidate and replace it with drift tree
+                    if (forest_candidate_vec.empty()) {
+                        cout << "forest_candidate_vec should not be empty" << endl;
+                        return 1;
+                    }
 
-                    candidate_t best_candidate =
-                        forest_candidate_vec[forest_candidate_vec.size() - 1];
+                    candidate_t best_candidate = forest_candidate_vec.back();
 
                     cout << "------------picked candidate tree: "
                         << best_candidate.tree_id << endl;
@@ -2302,8 +2306,7 @@ int main(int argc, char *argv[]) {
                     next_state[tree_id] = '0';
 
 
-                    forest_candidate_vec.erase(forest_candidate_vec.begin()
-                            + forest_candidate_vec.size() - 1);
+                    forest_candidate_vec.pop_back();
 
                     cur_state = next_state;
                     state_queue->enqueue(cur_state);
