@@ -32,14 +32,13 @@ static int LEAF_COUNT_PER_TREE;
 static int LEAF_COUNTERS_SIZE_PER_TREE;
 
 struct tree_t {
-    int* tree;
-    int* leaf_class;
-    int* leaf_back;
-    int* leaf_counter;
-    int* cur_node_count_per_tree;
-    int* cur_leaf_count_per_tree;
-    int* samples_seen_count;
-    int* confusion_matrix;
+    int* tree = nullptr;
+    int* leaf_class = nullptr;
+    int* leaf_back = nullptr;
+    int* leaf_counter = nullptr;
+    int* cur_node_count_per_tree = nullptr;
+    int* cur_leaf_count_per_tree = nullptr;
+    int* samples_seen_count = nullptr;
 };
 
 struct candidate_t {
@@ -343,14 +342,18 @@ __global__ void tree_traversal(
     }
 
     if (pos >= node_count_per_tree) {
-            printf("pos out of node_count_per_tree: %i\n", tree_idx);
+        printf("pos out of node_count_per_tree: %i\n", tree_idx);
     }
 
     if (cur_decision_tree[pos] == -1) {
-            printf("cannot be -1: %i\n", tree_idx);
+        printf("cannot be -1: %i\n", tree_idx);
     }
 
     int leaf_offset = (cur_decision_tree[pos] & (~(1 << 31)));
+
+    if (leaf_offset < 0 || leaf_offset >= leaf_count_per_tree) {
+        printf("leaf_offset out of bound: %i:%i\n", leaf_offset, leaf_count_per_tree);
+    }
 
     atomicAdd(&cur_samples_seen_count[leaf_offset], 1);
 
@@ -1058,14 +1061,19 @@ int main(int argc, char *argv[]) {
     }
 
     int* forest_idx_to_tree_id = (int*) malloc(TREE_COUNT * sizeof(int));
-    memset(forest_idx_to_tree_id, -1, TREE_COUNT * sizeof(int));
-
     int* tree_id_to_forest_idx = (int*) malloc(CPU_TREE_POOL_SIZE * sizeof(int));
-    memset(tree_id_to_forest_idx, -1, CPU_TREE_POOL_SIZE * sizeof(int));
 
     for (int i = 0; i < FOREGROUND_TREE_COUNT; i++) {
         forest_idx_to_tree_id[i] = i;
         tree_id_to_forest_idx[i] = i;
+    }
+
+    for (int i = FOREGROUND_TREE_COUNT; i < TREE_COUNT; i++) {
+        forest_idx_to_tree_id[i] = -1;
+    }
+
+    for (int i = FOREGROUND_TREE_COUNT; i < CPU_TREE_POOL_SIZE; i++) {
+        tree_id_to_forest_idx[i] = -1;
     }
 
     gpuErrchk(cudaMemcpy(d_decision_trees, h_decision_trees, NODE_COUNT_PER_TREE * TREE_COUNT
@@ -1235,8 +1243,8 @@ int main(int argc, char *argv[]) {
 
     int samples_seen_count_len = TREE_COUNT * LEAF_COUNT_PER_TREE;
     int *h_samples_seen_count = (int*) calloc(samples_seen_count_len, sizeof(int));
-    int *cpu_samples_seen_count = (int*) calloc(LEAF_COUNT_PER_TREE * CPU_TREE_POOL_SIZE,
-            sizeof(int));
+    int *cpu_samples_seen_count = (int*) malloc(LEAF_COUNT_PER_TREE
+            * CPU_TREE_POOL_SIZE * sizeof(int));
     int *d_samples_seen_count;
     if (!allocate_memory_on_device(&d_samples_seen_count, "samples_seen_count",
                 samples_seen_count_len)) {
@@ -1267,7 +1275,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     gpuErrchk(cudaMemcpy(d_cur_leaf_count_per_tree, h_cur_leaf_count_per_tree,
-                 TREE_COUNT * sizeof(int), cudaMemcpyHostToDevice));
+                TREE_COUNT * sizeof(int), cudaMemcpyHostToDevice));
 
 
     int forest_vote_len = INSTANCE_COUNT_PER_TREE * CLASS_COUNT;
@@ -1353,11 +1361,11 @@ int main(int argc, char *argv[]) {
         h_tree_active_status[i] = 1;
     }
 
-    for (int i = FOREGROUND_TREE_COUNT; i < (FOREGROUND_TREE_COUNT << 1); i++) {
+    for (int i = FOREGROUND_TREE_COUNT; i < GROWING_TREE_COUNT; i++) {
         h_tree_active_status[i] = 2;
     }
 
-    for (int i = (FOREGROUND_TREE_COUNT << 1); i < TREE_COUNT; i++) {
+    for (int i = GROWING_TREE_COUNT; i < TREE_COUNT; i++) {
         h_tree_active_status[i] = 4;
     }
 
@@ -1477,7 +1485,7 @@ int main(int argc, char *argv[]) {
     cudaMalloc(&d_state, GROWING_TREE_COUNT * INSTANCE_COUNT_PER_TREE * sizeof(curandState));
 
     setup_kernel<<<GROWING_TREE_COUNT, INSTANCE_COUNT_PER_TREE>>>(d_state);
-    cudaDeviceSynchronize();
+    gpuErrchk(cudaDeviceSynchronize());
 
     int leaf_counter_row_len = ATTRIBUTE_COUNT_TOTAL * 2;
     int iter_count = 1;
@@ -1562,6 +1570,8 @@ int main(int argc, char *argv[]) {
 
         log_file << "launching " << block_count * thread_count << " threads for tree_traversal" << endl;
 
+        gpuErrchk(cudaDeviceSynchronize());
+
         tree_traversal<<<block_count, thread_count>>>(
                 d_decision_trees,
                 d_tree_active_status,
@@ -1586,6 +1596,7 @@ int main(int argc, char *argv[]) {
                 confusion_matrix_size,
                 d_state);
 
+        gpuErrchk(cudaDeviceSynchronize());
 
 #if DEBUG
 
@@ -1600,7 +1611,6 @@ int main(int argc, char *argv[]) {
 
 #endif
 
-        cudaDeviceSynchronize();
         log_file << "tree_traversal completed" << endl;
 
         gpuErrchk(cudaMemcpy(&h_correct_counter, d_correct_counter, sizeof(int),
@@ -1680,7 +1690,7 @@ int main(int argc, char *argv[]) {
                     LEAF_COUNT_PER_TREE,
                     LEAF_COUNTER_SIZE);
 
-        cudaDeviceSynchronize();
+        gpuErrchk(cudaDeviceSynchronize());
         log_file << "counter_increase completed" << endl;
 
 #if DEBUG
@@ -1764,7 +1774,7 @@ int main(int argc, char *argv[]) {
                 CLASS_COUNT,
                 LEAF_COUNTER_SIZE);
 
-        cudaDeviceSynchronize();
+        gpuErrchk(cudaDeviceSynchronize());
         log_file << "compute_information_gain completed" << endl;
 
 
@@ -1790,6 +1800,9 @@ int main(int argc, char *argv[]) {
                 NODE_COUNT_PER_TREE,
                 LEAF_COUNT_PER_TREE,
                 d_samples_seen_count);
+
+        gpuErrchk(cudaDeviceSynchronize());
+        log_file << "compute_node_split_decisions completed" << endl;
 
 #if DEBUG
 
@@ -1817,10 +1830,6 @@ int main(int argc, char *argv[]) {
 
 #endif
 
-        cudaDeviceSynchronize();
-        log_file << "compute_node_split_decisions completed" << endl;
-
-
         log_file << "\nlaunching node_split kernel..." << endl;
 
         node_split<<<1, GROWING_TREE_COUNT>>>(
@@ -1841,7 +1850,7 @@ int main(int argc, char *argv[]) {
                 ATTRIBUTE_COUNT_TOTAL,
                 CLASS_COUNT);
 
-        cudaDeviceSynchronize();
+        gpuErrchk(cudaDeviceSynchronize());
 
         log_file << "node_split completed" << endl;
 
@@ -1950,7 +1959,7 @@ int main(int argc, char *argv[]) {
                     confusion_matrix_size,
                     CLASS_COUNT);
 
-            cudaDeviceSynchronize();
+            gpuErrchk(cudaDeviceSynchronize());
         }
 
         if (warning_tree_count > 0 || drift_tree_count > 0) {
@@ -2405,7 +2414,7 @@ int main(int argc, char *argv[]) {
                     confusion_matrix_size,
                     CLASS_COUNT);
 
-            cudaDeviceSynchronize();
+            gpuErrchk(cudaDeviceSynchronize());
         }
 
         iter_count++;
