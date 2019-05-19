@@ -341,8 +341,8 @@ __global__ void tree_traversal(
         pos = cur_data_line[attribute_id] == 0 ? get_left(pos) : get_right(pos);
     }
 
-    if (pos >= node_count_per_tree) {
-        printf("pos out of node_count_per_tree: %i\n", tree_idx);
+    if (pos < 0 || pos >= node_count_per_tree) {
+        printf("pos out of bound: %i\n", tree_idx);
     }
 
     if (cur_decision_tree[pos] == -1) {
@@ -357,18 +357,19 @@ __global__ void tree_traversal(
 
     atomicAdd(&cur_samples_seen_count[leaf_offset], 1);
 
-    // online bagging
-    int *cur_weights = weights + tree_idx * instance_count_per_tree;
-
-    // curand library poisson is super slow!
-    // cur_weights[instance_idx] = curand_poisson(state + thread_pos, 1.0);
-
-    // prepare weights to be used in counter_increase kernel
-    cur_weights[instance_idx] = poisson(1.0, state + thread_pos);
-    // printf("==================================cur weight: %i\n", cur_weights[instance_idx]);
 
     int predicted_class = cur_leaf_class[leaf_offset];
     int actual_class = cur_data_line[attribute_count_total];
+
+
+    if (predicted_class < 0 || predicted_class >= class_count) {
+        printf("predicted_class out of range: %i\n", predicted_class);
+    }
+
+    if (actual_class < 0 || actual_class >= class_count) {
+        printf("predicted_class out of range: %i\n", actual_class);
+    }
+
 
     if (pos == 0) {
         predicted_class = majority_class;
@@ -389,6 +390,15 @@ __global__ void tree_traversal(
 
     int *cur_is_leaf_active = is_leaf_active + tree_idx * leaf_count_per_tree;
     cur_is_leaf_active[leaf_offset] = 1;
+
+    // online bagging
+    int *cur_weights = weights + tree_idx * instance_count_per_tree;
+
+    // curand library poisson is super slow!
+    // cur_weights[instance_idx] = curand_poisson(state + thread_pos, 1.0);
+
+    // prepare weights to be used in counter_increase kernel
+    cur_weights[instance_idx] = poisson(1.0, state + thread_pos);
 
     if (cur_tree_status == 3) {
         // growing background tree does not particiate in voting
@@ -1551,9 +1561,6 @@ int main(int argc, char *argv[]) {
 
         log_file << "\nlaunching tree_traversal kernel..." << endl;
 
-        block_count = TREE_COUNT;
-        thread_count = INSTANCE_COUNT_PER_TREE;
-
         gpuErrchk(cudaMemset(d_correct_counter, 0, sizeof(int)));
         gpuErrchk(cudaMemset(d_tree_error_count, 0, tree_error_count_len * sizeof(int)));
         gpuErrchk(cudaMemset(d_confusion_matrix, 0, confusion_matrix_size * sizeof(int)));
@@ -1567,6 +1574,9 @@ int main(int argc, char *argv[]) {
 
         gpuErrchk(cudaMemcpy(d_tree_active_status, h_tree_active_status,
                     TREE_COUNT * sizeof(int), cudaMemcpyHostToDevice));
+
+        block_count = TREE_COUNT;
+        thread_count = INSTANCE_COUNT_PER_TREE;
 
         log_file << "launching " << block_count * thread_count << " threads for tree_traversal" << endl;
 
