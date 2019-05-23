@@ -17,8 +17,8 @@
 #include <thrust/sort.h>
 #include <thrust/execution_policy.h>
 #include "ADWIN.cu"
-#include "LRU_state.cu"
 #include "state_graph.cu"
+#include "LRU_state.cu"
 
 using namespace std;
 #define EPS 1e-9
@@ -348,6 +348,8 @@ __global__ void tree_traversal(
         pos = cur_data_line[attribute_id] == 0 ? get_left(pos) : get_right(pos);
     }
 
+#if DEBUG
+
     if (pos < 0 || pos >= node_count_per_tree) {
         printf("pos out of bound: %i\n", tree_idx);
     }
@@ -355,6 +357,8 @@ __global__ void tree_traversal(
     if (cur_decision_tree[pos] == -1) {
         printf("cannot be -1: %i\n", tree_idx);
     }
+
+#endif
 
     int leaf_offset = (cur_decision_tree[pos] & (~(1 << 31)));
 
@@ -368,6 +372,7 @@ __global__ void tree_traversal(
     int predicted_class = cur_leaf_class[leaf_offset];
     int actual_class = cur_data_line[attribute_count_total];
 
+#if DEBUG
 
     if (predicted_class < 0 || predicted_class >= class_count) {
         printf("predicted_class out of range: %i\n", predicted_class);
@@ -377,6 +382,7 @@ __global__ void tree_traversal(
         printf("predicted_class out of range: %i\n", actual_class);
     }
 
+#endif
 
     if (pos == 0) {
         predicted_class = majority_class;
@@ -396,7 +402,9 @@ __global__ void tree_traversal(
     cur_reached_leaf_ids[instance_idx] = leaf_offset;
 
     int *cur_is_leaf_active = is_leaf_active + tree_idx * leaf_count_per_tree;
-    cur_is_leaf_active[leaf_offset] = 1;
+    if (get_left(pos) < node_count_per_tree) {
+        cur_is_leaf_active[leaf_offset] = 1;
+    }
 
     // online bagging
     int *cur_weights = weights + tree_idx * instance_count_per_tree;
@@ -567,6 +575,7 @@ __global__ void compute_information_gain(
     // sum up a column
     float sum = 0.0;
 
+#pragma unroll
     for (int i = 0; i < class_count; i++) {
         int a_ijk = cur_leaf_counter[col_idx + (2 + i) * leaf_counter_row_len];
 
@@ -607,6 +616,7 @@ __global__ void compute_information_gain(
     int majority_class_code = 0;
     int majority_class_count = 0;
 
+#pragma unroll
     for (int k = 0; k < class_count; k++) {
         int a_k = cur_leaf_counter[threadIdx.x + (2 + k) * leaf_counter_row_len]
                 + cur_leaf_counter[threadIdx.x + 1 + (2 + k) * leaf_counter_row_len];
@@ -832,6 +842,7 @@ __global__ void node_split(
     int right_max_count = cur_leaf_counter[attribute_count_total * 2 * 2
         + attribute_id * 2 + 1];
 
+#pragma unroll
     for (int k = 1; k < class_count; k++) {
         // left
         int cur_left_class_count = cur_leaf_counter[attribute_count_total * 2 * (k + 2) +
@@ -857,6 +868,7 @@ __global__ void node_split(
     // reset current leaf_counter and add copy mask to a new leaf counter
     int *new_leaf_counter = cur_tree_leaf_counters + new_leaf_id * counter_size_per_leaf;
 
+#pragma unroll
     for (int k = 0; k < class_count + 2; k++) {
         int *cur_leaf_counter_row = cur_leaf_counter + attribute_count_total * 2 * k;
         int *new_leaf_counter_row = new_leaf_counter + attribute_count_total * 2 * k;
