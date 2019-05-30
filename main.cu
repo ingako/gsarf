@@ -1392,7 +1392,6 @@ int main(int argc, char *argv[]) {
 
 
     // for swapping background trees when drift is detected
-    state_graph* state_transition_graph = new state_graph(CPU_TREE_POOL_SIZE);
     LRU_state* state_queue = new LRU_state(100, edit_distance_threshold);
 
     // TODO
@@ -2052,21 +2051,7 @@ int main(int argc, char *argv[]) {
 
 
         if (STATE_ADAPTIVE && warning_tree_count > 0) {
-            vector<char> closest_state;
-            if  (state_transition_graph->is_stable) {
-                closest_state = target_state;
-
-                for (int warning_tree_id : warning_tree_id_list) {
-                    int next_tree_id =
-                        state_transition_graph->get_next_tree_id(warning_tree_id);
-
-                    closest_state[warning_tree_id] = '0';
-                    closest_state[next_tree_id] = '1';
-                }
-
-            } else {
-                closest_state = state_queue->get_closest_state(target_state);
-            }
+            vector<char> closest_state = state_queue->get_closest_state(target_state);
 
             string closest_state_str(closest_state.begin(), closest_state.end());
             // cout << "get_closest_state: " << closest_state_str << endl;
@@ -2211,9 +2196,7 @@ int main(int argc, char *argv[]) {
                 int forest_tree_idx = h_drift_tree_idx_arr[i];
                 int forest_bg_tree_idx = forest_tree_idx + FOREGROUND_TREE_COUNT;
 
-                // cout << "tree_id: " << tree_id << endl;
-                // cout << "forest_tree_idx: " << forest_tree_idx << endl;
-                // cout << "forest_bg_tree_idx: " << forest_bg_tree_idx << endl;
+#if DEBUG
 
                 if (tree_id < 0 || tree_id >= CPU_TREE_POOL_SIZE) {
                     cout << "wrong tree_id" << endl;
@@ -2230,6 +2213,8 @@ int main(int argc, char *argv[]) {
                     cout << "wrong forest_bg_tree_idx" << endl;
                     return 1;
                 }
+
+#endif
 
                 double fg_tree_accuracy = (INSTANCE_COUNT_PER_TREE
                         - h_tree_error_count[forest_tree_idx])
@@ -2339,6 +2324,8 @@ int main(int argc, char *argv[]) {
                     cout << "------------picked candidate tree: "
                         << best_candidate.tree_id << endl;
 
+#if DEBUG
+
                     if (best_candidate.tree_id < 0
                             || best_candidate.tree_id >= CPU_TREE_POOL_SIZE) {
                         cout << "incorrect best_candidate.tree_id" << endl;
@@ -2351,13 +2338,14 @@ int main(int argc, char *argv[]) {
                         return 1;
                     }
 
+#endif
 
                     // replace drift tree with its candidate tree
                     tree_memcpy(&cpu_forest[best_candidate.tree_id],
                             &h_forest[forest_tree_idx], true);
 
-                    cout << "replace drift tree with candidate " << best_candidate.tree_id
-                        << endl;
+                    // cout << "replace drift tree with candidate " << best_candidate.tree_id
+                    //     << endl;
 
                     tree_id_to_forest_idx[best_candidate.tree_id] = forest_tree_idx;
                     forest_idx_to_tree_id[forest_tree_idx] = best_candidate.tree_id;
