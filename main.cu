@@ -904,11 +904,14 @@ int main(int argc, char *argv[]) {
     int edit_distance_threshold = 50;
     bool STATE_ADAPTIVE = false;
 
+    double warning_delta = 0.001;
+    double drift_delta = 0.00001;
+
     string data_path = "data/covtype";
     string data_file_name = "covtype_binary_attributes.csv";
 
     int opt;
-    while ((opt = getopt(argc, argv, "t:i:p:n:s:d:g:k:e:rc")) != -1) {
+    while ((opt = getopt(argc, argv, "t:i:p:n:s:d:g:k:e:x:y:rc")) != -1) {
         switch (opt) {
             case 'c':
                 STATE_ADAPTIVE = true;
@@ -939,6 +942,12 @@ int main(int argc, char *argv[]) {
                 break;
             case 'e':
                 edit_distance_threshold = atoi(optarg);
+                break;
+            case 'x':
+                warning_delta = atof(optarg);
+                break;
+            case 'y':
+                drift_delta = atof(optarg);
                 break;
             case 'r':
                 // Use a different seed value for each run
@@ -1367,8 +1376,8 @@ int main(int argc, char *argv[]) {
     ADWIN* drift_detectors[FOREGROUND_TREE_COUNT];
 
     for (int i = 0; i < FOREGROUND_TREE_COUNT; i++) {
-        warning_detectors[i] = new ADWIN((double) 0.001);
-        drift_detectors[i] = new ADWIN((double) 0.00001);
+        warning_detectors[i] = new ADWIN(warning_delta);
+        drift_detectors[i] = new ADWIN(drift_delta);
     }
 
     int tree_error_count_len = TREE_COUNT;
@@ -1406,6 +1415,8 @@ int main(int argc, char *argv[]) {
     for (int i = FOREGROUND_TREE_COUNT; i < CPU_TREE_POOL_SIZE; i++) {
         cur_state[i] = '0';
     }
+
+    state_queue->enqueue(cur_state);
 
 
     // TODO
@@ -1947,7 +1958,8 @@ int main(int argc, char *argv[]) {
 
             // warning detected
             if (error_change) {
-                warning_detectors[tree_idx] = new ADWIN((double) 0.001);
+                delete warning_detectors[tree_idx];
+                warning_detectors[tree_idx] = new ADWIN(warning_delta);
 
                 // grow background tree
                 if (h_tree_active_status[bg_tree_pos] == 2) {
@@ -1981,8 +1993,11 @@ int main(int argc, char *argv[]) {
             }
 
             // drift detected
-            warning_detectors[tree_idx] = new ADWIN((double) 0.001);
-            drift_detectors[tree_idx] = new ADWIN((double) 0.00001);
+            delete warning_detectors[tree_idx];
+            delete drift_detectors[tree_idx];
+
+            warning_detectors[tree_idx] = new ADWIN(warning_delta);
+            drift_detectors[tree_idx] = new ADWIN(drift_delta);
 
             h_drift_tree_idx_arr[drift_tree_count] = tree_idx;
             drift_tree_count++;
@@ -2053,8 +2068,11 @@ int main(int argc, char *argv[]) {
         if (STATE_ADAPTIVE && warning_tree_count > 0) {
             vector<char> closest_state = state_queue->get_closest_state(target_state);
 
+            string target_state_str(target_state.begin(), target_state.end());
             string closest_state_str(closest_state.begin(), closest_state.end());
-            // cout << "get_closest_state: " << closest_state_str << endl;
+
+            cout << "target_state: " << target_state_str << endl;
+            cout << "get_closest_state: " << closest_state_str << endl;
 
             if (closest_state.size() != 0) {
 
@@ -2269,6 +2287,10 @@ int main(int argc, char *argv[]) {
                             INSTANCE_COUNT_PER_TREE);
 
                     forest_swap_tree_idx = -1;
+                    // cout << "bg_tree_kappa: " << bg_tree_kappa << endl;
+                    // cout << "bg_tree_acc: " << bg_tree_accuracy << endl;
+                    // cout << "drift_tree_kappa: " << drift_tree_kappa << endl;
+                    // cout << "drift_tree_acc: " << fg_tree_accuracy << endl;
                     if (fabs(bg_tree_kappa - drift_tree_kappa) > 0.01) {
                         add_bg_tree = true;
                     }
@@ -2365,8 +2387,9 @@ int main(int argc, char *argv[]) {
                     state_queue->enqueue(cur_state);
                     state_queue->to_string();
                 }
-
             }
+
+            cout << "cur_tree_pool_size: " << cur_tree_pool_size << endl;
 
 #if DEBUG
 
