@@ -898,10 +898,12 @@ int main(int argc, char *argv[]) {
     int INSTANCE_COUNT_PER_TREE = 200;
     int SAMPLE_FREQUENCY = 1000;
 
-
     float n_min = 50; // hoeffding bound parameter, grace_period
+
     double kappa_threshold = 0.1;
     int edit_distance_threshold = 50;
+    double bg_tree_add_delta = 0.01;
+
     bool STATE_ADAPTIVE = false;
 
     double warning_delta = 0.001;
@@ -911,8 +913,11 @@ int main(int argc, char *argv[]) {
     string data_file_name = "covtype_binary_attributes.csv";
 
     int opt;
-    while ((opt = getopt(argc, argv, "t:i:p:n:s:d:g:k:e:x:y:rc")) != -1) {
+    while ((opt = getopt(argc, argv, "b:t:i:p:n:s:d:g:k:e:x:y:rc")) != -1) {
         switch (opt) {
+	    case 'b':
+		bg_tree_add_delta = atof(optarg);
+		break;
             case 'c':
                 STATE_ADAPTIVE = true;
                 break;
@@ -2068,11 +2073,14 @@ int main(int argc, char *argv[]) {
         if (STATE_ADAPTIVE && warning_tree_count > 0) {
             vector<char> closest_state = state_queue->get_closest_state(target_state);
 
+#if Debug
             string target_state_str(target_state.begin(), target_state.end());
             string closest_state_str(closest_state.begin(), closest_state.end());
 
             cout << "target_state: " << target_state_str << endl;
             cout << "get_closest_state: " << closest_state_str << endl;
+#endif
+
 
             if (closest_state.size() != 0) {
 
@@ -2254,7 +2262,7 @@ int main(int argc, char *argv[]) {
                     candidate_t best_candidate =
                         forest_candidate_vec[forest_candidate_vec.size() - 1];
 
-                    if (best_candidate.kappa - drift_tree_kappa > kappa_threshold) {
+                    if (best_candidate.kappa - drift_tree_kappa >= kappa_threshold) {
                         forest_swap_tree_idx = best_candidate.tree_id;
 
 #if DEBUG
@@ -2291,7 +2299,7 @@ int main(int argc, char *argv[]) {
                     // cout << "bg_tree_acc: " << bg_tree_accuracy << endl;
                     // cout << "drift_tree_kappa: " << drift_tree_kappa << endl;
                     // cout << "drift_tree_acc: " << fg_tree_accuracy << endl;
-                    if (fabs(bg_tree_kappa - drift_tree_kappa) > 0.01) {
+                    if (fabs(bg_tree_kappa - drift_tree_kappa) > bg_tree_add_delta) {
                         add_bg_tree = true;
                     }
                 }
@@ -2497,9 +2505,16 @@ int main(int argc, char *argv[]) {
         iter_count++;
     }
 
-    log_file << "cur_tree_pool_size: " << cur_tree_pool_size << endl;
-    log_file << "pattern matched: " << matched_pattern << endl;
     log_file << "\ntraining completed" << endl;
+
+    if (STATE_ADAPTIVE) {
+        log_file << "cur_tree_pool_size: " << cur_tree_pool_size << endl;
+        log_file << "pattern matched: " << matched_pattern << endl;
+
+	std::ofstream tree_pool_size_log;
+	tree_pool_size_log.open(data_path + "log.tree_pool_size", std::ios_base::app);
+	tree_pool_size_log << data_file_name << " " <<  cur_tree_pool_size << endl;
+    }
 
 #if DEBUG
 
