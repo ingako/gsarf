@@ -18,7 +18,6 @@
 #include <thrust/execution_policy.h>
 
 #include "ADWIN.cu"
-#include "state_graph.cu"
 #include "LRU_state.cu"
 
 using namespace std;
