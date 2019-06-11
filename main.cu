@@ -16,14 +16,15 @@
 #include <curand_kernel.h>
 #include <thrust/sort.h>
 #include <thrust/execution_policy.h>
+
 #include "ADWIN.cu"
 #include "state_graph.cu"
 #include "LRU_state.cu"
 
 using namespace std;
+
 #define EPS 1e-9
 #define IS_BIT_SET(val, pos) (val & (1 << pos))
-
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 
 static int NODE_COUNT_PER_TREE;
@@ -108,24 +109,6 @@ double get_kappa(int *confusion_matrix, int class_count, double accuracy, int sa
     return (p0 - pc) / (1.0 - pc);
 }
 
-
-
-void select_k_attributes(int *reservoir, int n, int k) {
-    for (int i = 0; i < k; i++) {
-        reservoir[i] = rand() % n;
-    }
-
-    // int i;
-    // for (i = 0; i < k; i++) {
-    //     reservoir[i] = i;
-    // }
-
-    // for (i = k; i < n; i++) {
-    //     int j = rand() % (i + 1);
-
-    //     if (j < k) reservoir[j] = i;
-    // }
-}
 
 vector<string> split_attributes(string line, char delim) {
     vector<string> arr;
@@ -1806,8 +1789,6 @@ int main(int argc, char *argv[]) {
 
 
         // select k random attributes for each tree
-        // output_file << "\nAttributes selected per tree: " << endl;
-
         for (int tree_idx = 0; tree_idx < GROWING_TREE_COUNT; tree_idx++) {
 
             // select random attributes for active trees only
@@ -1815,16 +1796,12 @@ int main(int argc, char *argv[]) {
                 continue;
             }
 
-            // output_file << "tree " << tree_idx << endl;
-
             int *cur_attribute_val_arr = h_attribute_val_arr + tree_idx * ATTRIBUTE_COUNT_PER_TREE;
-            select_k_attributes(cur_attribute_val_arr, ATTRIBUTE_COUNT_TOTAL,
-                    ATTRIBUTE_COUNT_PER_TREE);
 
-            // for (int i = 0; i < ATTRIBUTE_COUNT_PER_TREE; i++) {
-            //     output_file << cur_attribute_val_arr[i] << " ";
-            // }
-            // output_file << endl;
+            // choose with replacement increases uncorrelation among trees
+            for (int i = 0; i < ATTRIBUTE_COUNT_PER_TREE; i++) {
+                cur_attribute_val_arr[i] = rand() % ATTRIBUTE_COUNT_TOTAL;
+            }
         }
 
         gpuErrchk(cudaMemcpy(d_attribute_val_arr, h_attribute_val_arr,
