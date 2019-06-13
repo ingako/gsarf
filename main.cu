@@ -265,13 +265,6 @@ __global__ void reset_tree(
             cur_leaf_counter[k * leaf_counter_row_len + ij] = k == 1 ? 1 : 0;
         }
     }
-
-
-    // int *cur_tree_confusion_matrix = tree_confusion_matrix + tree_idx * confusion_matrix_size;
-
-    // for (int i = 0; i < confusion_matrix_size; i++) {
-    //     cur_tree_confusion_matrix[i] = 0;
-    // }
 }
 
 __global__ void tree_traversal(
@@ -479,16 +472,11 @@ __global__ void counter_increase(
     int counter_start_pos = reached_leaf_id * leaf_counter_size + tree_idx *
         leaf_count_per_tree * leaf_counter_size;
     int *cur_leaf_counter = leaf_counters + counter_start_pos;
-    // printf("leaf counter start pos is:  %i\n", counter_start_pos);
 
     int ij = cur_data[threadIdx.x] + threadIdx.x * 2; // binary value 0 or 1
     int k = cur_data[attribute_count_total]; // class
-
-    // int mask = cur_leaf_counter[attribute_count_total * 2 + ij];
     int n_ijk_idx = (k + 2) * attribute_count_total * 2 + ij;
 
-    // atomicAdd(&cur_leaf_counter[ij], mask); // row 0
-    // atomicAdd(&cur_leaf_counter[n_ijk_idx], mask);
     atomicAdd(&cur_leaf_counter[ij], cur_weight); // row 0
     atomicAdd(&cur_leaf_counter[n_ijk_idx], cur_weight);
 }
@@ -897,9 +885,9 @@ int main(int argc, char *argv[]) {
     int opt;
     while ((opt = getopt(argc, argv, "b:t:i:p:n:s:d:g:k:e:x:y:rc")) != -1) {
         switch (opt) {
-	    case 'b':
-		bg_tree_add_delta = atof(optarg);
-		break;
+	        case 'b':
+		        bg_tree_add_delta = atof(optarg);
+		        break;
             case 'c':
                 STATE_ADAPTIVE = true;
                 break;
@@ -961,12 +949,11 @@ int main(int argc, char *argv[]) {
     string output_path = data_path + "/result_gpu_";
 
     if (!STATE_ADAPTIVE) {
-        output_path += "bg_";
+        output_path += "garf_";
     }
 
     output_path += data_file_name.substr(0, lastindex) + ".csv";
 
-    // string output_path = data_path + "/result_gpu.csv";
     ofstream output_file;
     output_file.open(output_path);
 
@@ -1043,7 +1030,7 @@ int main(int argc, char *argv[]) {
     log_file << "CLASS_COUNT = " << CLASS_COUNT << endl;
 
     // hoeffding bound parameters
-    float delta = 0.05; // pow((float) 10.0, -7);
+    float delta = 0.05;
     float r = log2(CLASS_COUNT); // range of merit = log2(num_of_classes)
 
     log_file << endl
@@ -1055,7 +1042,6 @@ int main(int argc, char *argv[]) {
 
     // init decision tree
     log_file << "\nAllocating memory on host..." << endl;
-    // void *allocated = malloc(NODE_COUNT_PER_TREE * TREE_COUNT * sizeof(int));
     void *allocated = calloc(NODE_COUNT_PER_TREE * TREE_COUNT, sizeof(int));
     if (allocated == NULL) {
         log_file << "host error: memory allocation for decision trees failed" << endl;
@@ -1220,15 +1206,19 @@ int main(int argc, char *argv[]) {
     gpuErrchk(cudaMemcpy(d_leaf_counters, h_leaf_counters, ALL_LEAF_COUNTERS_SIZE * sizeof(int),
                 cudaMemcpyHostToDevice));
 
-    // TODO: h_info_gain_vals for testing only
     int info_gain_vals_len = GROWING_TREE_COUNT * LEAF_COUNT_PER_TREE * ATTRIBUTE_COUNT_PER_TREE * 2;
+
+#if Debug
+
     float *h_info_gain_vals = (float*) malloc(info_gain_vals_len * sizeof(float));
+
+#endif
+
 
     float *d_info_gain_vals;
     if (!allocate_memory_on_device(&d_info_gain_vals, "info_gain_vals", info_gain_vals_len)) {
         return 1;
     }
-
 
     // actual selected attributes for each tree for counter_increase kernel
     int *h_attribute_val_arr;
