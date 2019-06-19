@@ -151,6 +151,48 @@ vector<string> split(string str, string delim) {
     return arr;
 }
 
+void evaluate(
+        int* d_correct_counter,
+        int* h_confusion_matrix,
+        int* d_confusion_matrix,
+        double& window_accuracy,
+        double& window_kappa,
+        int& sample_count_iter,
+        int iter_count,
+        ofstream& log_file,
+        ofstream& output_file) {
+
+    int h_correct_counter = 0;
+    gpuErrchk(cudaMemcpy(&h_correct_counter, d_correct_counter, sizeof(int),
+                cudaMemcpyDeviceToHost));
+
+    log_file << "h_correct_counter: " << h_correct_counter << endl;
+
+    double accuracy = (double) h_correct_counter / INSTANCE_COUNT_PER_TREE;
+    window_accuracy = (sample_count_iter * window_accuracy + accuracy)
+        / (sample_count_iter + 1);
+
+    gpuErrchk(cudaMemcpy(h_confusion_matrix, d_confusion_matrix,
+                CLASS_COUNT * CLASS_COUNT * sizeof(int), cudaMemcpyDeviceToHost));
+
+    double kappa = get_kappa(h_confusion_matrix, CLASS_COUNT, accuracy,
+            INSTANCE_COUNT_PER_TREE);
+    window_kappa = (sample_count_iter * window_kappa + kappa) / (sample_count_iter + 1);
+
+    sample_count_iter++;;
+    int sample_count_total = sample_count_iter * INSTANCE_COUNT_PER_TREE; // avoid expensive mod
+
+    if (sample_count_total >= SAMPLE_FREQUENCY) {
+        output_file << iter_count * INSTANCE_COUNT_PER_TREE
+            << "," << window_accuracy * 100
+            << "," << window_kappa * 100 << endl;
+
+        sample_count_iter = 0;
+        window_accuracy = 0.0;
+        window_kappa = 0.0;
+    }
+}
+
 void tree_memcpy(tree_t *from_tree, tree_t *to_tree, bool is_background_tree) {
 
     memcpy(to_tree->tree, from_tree->tree, NODE_COUNT_PER_TREE * sizeof(int));
@@ -842,7 +884,6 @@ int main(int argc, char *argv[]) {
 
     log_file << endl << "=====Training Start=====" << endl;
 
-    int h_correct_counter = 0;
     int *d_correct_counter;
     gpuErrchk(cudaMalloc((void **) &d_correct_counter, sizeof(int)));
 
@@ -856,11 +897,9 @@ int main(int argc, char *argv[]) {
     int iter_count = 1;
 
     int sample_count_iter = 0;
-    int sample_count_total = 0;
     double window_accuracy = 0.0;
     double window_kappa = 0.0;
 
-    // output_file << "#iteration,accuracy,mean_accuracy,kappa,mean_kappa" << endl;
     output_file << "#iteration,accuracy,kappa" << endl;
 
     bool eof = false;
@@ -941,38 +980,16 @@ int main(int argc, char *argv[]) {
 
         log_file << "tree_traversal completed" << endl;
 
-        gpuErrchk(cudaMemcpy(&h_correct_counter, d_correct_counter, sizeof(int),
-                    cudaMemcpyDeviceToHost));
-
-        log_file << "h_correct_counter: " << h_correct_counter << endl;
-
-        double accuracy = (double) h_correct_counter / INSTANCE_COUNT_PER_TREE;
-        window_accuracy = (sample_count_iter * window_accuracy + accuracy)
-            / (sample_count_iter + 1);
-
-        gpuErrchk(cudaMemcpy(h_confusion_matrix, d_confusion_matrix,
-                    confusion_matrix_size * sizeof(int), cudaMemcpyDeviceToHost));
-
-        double kappa = get_kappa(h_confusion_matrix, CLASS_COUNT, accuracy,
-                INSTANCE_COUNT_PER_TREE);
-        window_kappa = (sample_count_iter * window_kappa + kappa) / (sample_count_iter + 1);
-
-        // log_file << "\n=================statistics" << endl
-        //     << "accuracy: " << accuracy << endl
-        //     << "kappa: " << kappa << endl;
-
-        sample_count_iter++;;
-        sample_count_total = sample_count_iter * INSTANCE_COUNT_PER_TREE; // avoid expensive mod
-
-        if (sample_count_total >= SAMPLE_FREQUENCY) {
-            output_file << iter_count * INSTANCE_COUNT_PER_TREE
-                << "," << window_accuracy * 100
-                << "," << window_kappa * 100 << endl;
-
-            sample_count_iter = 0;
-            window_accuracy = 0.0;
-            window_kappa = 0.0;
-        }
+        evaluate(
+                d_correct_counter,
+                h_confusion_matrix,
+                d_confusion_matrix,
+                window_accuracy,
+                window_kappa,
+                sample_count_iter,
+                iter_count,
+                log_file,
+                output_file);
 
 
 #if DEBUG
