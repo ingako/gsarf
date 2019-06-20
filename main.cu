@@ -136,7 +136,6 @@ vector<string> split_attributes(string line, char delim) {
     return arr;
 }
 
-
 vector<string> split(string str, string delim) {
     char* cstr = const_cast<char*>(str.c_str());
     char* current;
@@ -149,6 +148,47 @@ vector<string> split(string str, string delim) {
     }
 
     return arr;
+}
+
+bool prepare_data(
+        ifstream& data_file,
+        int* h_data,
+        map<string, int>& class_code_map,
+        int* class_count_arr,
+        int& majority_class) {
+
+    int h_data_idx = 0;
+
+    string line;
+    for (int instance_idx = 0; instance_idx < INSTANCE_COUNT_PER_TREE; instance_idx++) {
+        if (!getline(data_file, line)) {
+            // reached end of line
+            return false;
+        }
+
+        vector<string> raw_data_row = split(line, ",");
+
+        for (int i = 0; i < ATTRIBUTE_COUNT_TOTAL; i++) {
+            int val = stoi(raw_data_row[i]);
+            h_data[h_data_idx++] = val;
+        }
+
+        int cur_class_code = class_code_map[raw_data_row[ATTRIBUTE_COUNT_TOTAL]];
+        h_data[h_data_idx] = cur_class_code;
+        class_count_arr[cur_class_code]++;
+
+        h_data_idx++;
+    }
+
+    int majority_class_count = 0;
+    for (int i = 0; i < CLASS_COUNT; i++) {
+        if (majority_class_count < class_count_arr[i]) {
+            majority_class_count = class_count_arr[i];
+            majority_class = i;
+        }
+    }
+
+    return true;
 }
 
 void evaluate(
@@ -880,8 +920,6 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    vector<string> raw_data_row;
-
     log_file << endl << "=====Training Start=====" << endl;
 
     int *d_correct_counter;
@@ -901,51 +939,19 @@ int main(int argc, char *argv[]) {
 
     output_file << "#iteration,accuracy,kappa" << endl;
 
-    bool eof = false;
     int matched_pattern = 0;
 
-    while (!eof) {
+    while (true) {
 
-        int h_data_idx = 0;
+        int majority_class = 0;
         int class_count_arr[CLASS_COUNT] = { 0 };
 
-        for (int instance_idx = 0; instance_idx < INSTANCE_COUNT_PER_TREE; instance_idx++) {
-            if (!getline(data_file, line)) {
-                eof = true;
-                break;
-            }
-
-            raw_data_row = split(line, ",");
-
-            for (int i = 0; i < ATTRIBUTE_COUNT_TOTAL; i++) {
-                int val = stoi(raw_data_row[i]);
-                h_data[h_data_idx++] = val;
-            }
-
-            int cur_class_code = class_code_map[raw_data_row[ATTRIBUTE_COUNT_TOTAL]];
-            h_data[h_data_idx] = cur_class_code;
-            class_count_arr[cur_class_code]++;
-
-            h_data_idx++;
-        }
-
-        if (eof) {
+        if (!prepare_data(data_file, h_data, class_code_map, class_count_arr, majority_class)) { 
+            // reached end of line
             break;
         }
 
-        log_file << endl << "=================iteration " << iter_count
-            << "=================" << endl;
-
-        int majority_class = 0;
-        int majority_class_count = 0;
-
-        for (int i = 0; i < CLASS_COUNT; i++) {
-            if (majority_class_count < class_count_arr[i]) {
-                majority_class_count = class_count_arr[i];
-                majority_class = i;
-            }
-        }
-
+        log_file << "\n=================iteration " << iter_count << "=================" << endl;
 
         log_file << "\nlaunching tree_traversal kernel..." << endl;
     
