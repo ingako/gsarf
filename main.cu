@@ -669,19 +669,9 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    // TODO same attribute_idx_arr for foreground and its background tree
-
     // allocate memory for node_split_decisions
-    // unsigned int *h_node_split_decisions;
     int *d_node_split_decisions;
     int node_split_decisions_len = LEAF_COUNT_PER_TREE * GROWING_TREE_COUNT;
-
-    // allocated = malloc(node_split_decisions_len * sizeof(unsigned int));
-    // if (allocated == NULL) {
-    //     log_file << "host error: memory allocation for h_node_split_decisions failed" << endl;
-    //     return 1;
-    // }
-    // h_node_split_decisions = (unsigned int*) allocated;
 
     if (!allocate_memory_on_device(&d_node_split_decisions, "node_split_decisions",
                 node_split_decisions_len)) {
@@ -744,7 +734,8 @@ int main(int argc, char *argv[]) {
     }
 
     int *d_weights;
-    if (!allocate_memory_on_device(&d_weights, "weights", GROWING_TREE_COUNT * INSTANCE_COUNT_PER_TREE)) {
+    if (!allocate_memory_on_device(&d_weights, "weights", GROWING_TREE_COUNT
+                * INSTANCE_COUNT_PER_TREE)) {
         return 1;
     }
 
@@ -1061,7 +1052,6 @@ int main(int argc, char *argv[]) {
         log_file << "compute_information_gain completed" << endl;
 
 
-
         log_file << "\nlaunching compute_node_split_decisions kernel..." << endl;
 
         compute_node_split_decisions_host(
@@ -1076,7 +1066,6 @@ int main(int argc, char *argv[]) {
                 d_samples_seen_count);
 
         log_file << "compute_node_split_decisions completed" << endl;
-
 
 
         log_file << "\nlaunching node_split kernel..." << endl;
@@ -1096,6 +1085,7 @@ int main(int argc, char *argv[]) {
                 d_cur_leaf_count_per_tree);
 
         log_file << "node_split completed" << endl;
+
 
         // for drift detection
         gpuErrchk(cudaMemcpy((void *) h_tree_error_count, (void *) d_tree_error_count,
@@ -1450,10 +1440,6 @@ int main(int argc, char *argv[]) {
                             INSTANCE_COUNT_PER_TREE);
 
                     forest_swap_tree_idx = -1;
-                    // cout << "bg_tree_kappa: " << bg_tree_kappa << endl;
-                    // cout << "bg_tree_acc: " << bg_tree_accuracy << endl;
-                    // cout << "drift_tree_kappa: " << drift_tree_kappa << endl;
-                    // cout << "drift_tree_acc: " << fg_tree_accuracy << endl;
                     if (fabs(bg_tree_kappa - drift_tree_kappa) > bg_tree_add_delta) {
                         add_bg_tree = true;
                     }
@@ -1470,10 +1456,8 @@ int main(int argc, char *argv[]) {
                 tree_memcpy(&h_forest[forest_tree_idx], &cpu_forest[tree_id], true);
 
                 tree_id_to_forest_idx[tree_id] = -1;
-                // forest_idx_to_tree_id[forest_tree_idx] = -1;
 
                 if (forest_swap_tree_idx == -1) {
-                    // cout << "pick background tree" << endl;
 
                     // replace drift tree with its background tree
                     tree_memcpy(&h_forest[forest_bg_tree_idx], &h_forest[forest_tree_idx], true);
@@ -1528,9 +1512,6 @@ int main(int argc, char *argv[]) {
                     // replace drift tree with its candidate tree
                     tree_memcpy(&cpu_forest[best_candidate.tree_id],
                             &h_forest[forest_tree_idx], true);
-
-                    // cout << "replace drift tree with candidate " << best_candidate.tree_id
-                    //     << endl;
 
                     tree_id_to_forest_idx[best_candidate.tree_id] = forest_tree_idx;
                     forest_idx_to_tree_id[forest_tree_idx] = best_candidate.tree_id;
@@ -1657,9 +1638,9 @@ int main(int argc, char *argv[]) {
         log_file << "cur_tree_pool_size: " << cur_tree_pool_size << endl;
         log_file << "pattern matched: " << matched_pattern << endl;
 
-	std::ofstream tree_pool_size_log;
-	tree_pool_size_log.open(data_path + "log.tree_pool_size", std::ios_base::app);
-	tree_pool_size_log << data_file_name << " " <<  cur_tree_pool_size << endl;
+	    std::ofstream tree_pool_size_log;
+	    tree_pool_size_log.open(data_path + "log.tree_pool_size", std::ios_base::app);
+	    tree_pool_size_log << data_file_name << " " <<  cur_tree_pool_size << endl;
     }
 
 #if DEBUG
