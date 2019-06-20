@@ -10,7 +10,7 @@
 #include <math.h>
 #include <algorithm>
 #include <map>
-#include <iomanip> 
+#include <iomanip>
 
 #include <cuda.h>
 #include <curand.h>
@@ -22,34 +22,34 @@
 using namespace std;
 
 extern "C" void tree_traversal_host(
-        int *d_decision_trees,
-        int *h_tree_active_status,
-        int *d_tree_active_status,
-        int *h_data,
-        int *d_data,
+        int* d_decision_trees,
+        int* h_tree_active_status,
+        int* d_tree_active_status,
+        int* h_data,
+        int* d_data,
         int data_len,
-        int *d_reached_leaf_ids,
-        int *d_is_leaf_active,
-        int *d_leaf_class,
-        int *d_correct_counter,
-        int *d_samples_seen_count,
-        int *d_forest_vote,
+        int* d_reached_leaf_ids,
+        int* d_is_leaf_active,
+        int* d_leaf_class,
+        int* d_correct_counter,
+        int* d_samples_seen_count,
+        int* d_forest_vote,
         int forest_vote_len,
-        int *h_forest_vote_idx_arr,
-        int *d_forest_vote_idx_arr,
-        int *d_weights,
-        int *d_tree_error_count,
+        int* h_forest_vote_idx_arr,
+        int* d_forest_vote_idx_arr,
+        int* d_weights,
+        int* d_tree_error_count,
         int tree_error_count_len,
-        int *d_confusion_matrix,
-        int *d_tree_confusion_matrix,
-        int *d_class_count_arr,
+        int* d_confusion_matrix,
+        int* d_tree_confusion_matrix,
+        int* d_class_count_arr,
         int majority_class,
         int confusion_matrix_size,
-        curandState *d_state,
-        int *class_count_arr,
-        ofstream &log_file) { 
+        curandState* d_state,
+        int* class_count_arr,
+        ofstream& log_file) {
 
-    gpuErrchk(cudaMemcpy((void *) d_data, (void *) h_data, data_len * sizeof(int), 
+    gpuErrchk(cudaMemcpy((void *) d_data, (void *) h_data, data_len * sizeof(int),
                 cudaMemcpyHostToDevice));
 
     gpuErrchk(cudaMemcpy((void *) d_class_count_arr, (void *) class_count_arr, CLASS_COUNT
@@ -106,11 +106,11 @@ extern "C" void tree_traversal_host(
 }
 
 extern "C" void counter_increase_host(
-        int *d_leaf_counters,
-        int *d_tree_active_status,
-        int *d_reached_leaf_ids,
-        int *d_data,
-        int *d_weights) {
+        int* d_leaf_counters,
+        int* d_tree_active_status,
+        int* d_reached_leaf_ids,
+        int* d_data,
+        int* d_weights) {
 
     counter_increase
         <<<dim3(GROWING_TREE_COUNT, INSTANCE_COUNT_PER_TREE), ATTRIBUTE_COUNT_TOTAL>>>(
@@ -128,14 +128,14 @@ extern "C" void counter_increase_host(
 }
 
 extern "C" void compute_information_gain_host(
-        int *d_leaf_counters,
-        int *d_is_leaf_active,
-        int *h_tree_active_status,
-        int *d_tree_active_status,
-        int *d_leaf_class,
-        float *d_info_gain_vals,
-        int *h_attribute_val_arr,
-        int *d_attribute_val_arr) {
+        int* d_leaf_counters,
+        int* d_is_leaf_active,
+        int* h_tree_active_status,
+        int* d_tree_active_status,
+        int* d_leaf_class,
+        float* d_info_gain_vals,
+        int* h_attribute_val_arr,
+        int* d_attribute_val_arr) {
 
     // select k random attributes for each tree
     for (int tree_idx = 0; tree_idx < GROWING_TREE_COUNT; tree_idx++) {
@@ -183,14 +183,14 @@ extern "C" void compute_information_gain_host(
 
 extern "C" void compute_node_split_decisions_host(
         float* d_info_gain_vals,
-        int *d_is_leaf_active,
-        int *d_leaf_back,
-        int *d_tree_active_status,
-        int *d_attribute_val_arr,
-        int *h_attribute_idx_arr,
-        int *d_attribute_idx_arr,
-        int *d_node_split_decisions,
-        int *d_samples_seen_count) {
+        int* d_is_leaf_active,
+        int* d_leaf_back,
+        int* d_tree_active_status,
+        int* d_attribute_val_arr,
+        int* h_attribute_idx_arr,
+        int* d_attribute_idx_arr,
+        int* d_node_split_decisions,
+        int* d_samples_seen_count) {
 
     gpuErrchk(cudaMemcpy(d_attribute_idx_arr, h_attribute_idx_arr,
                 GROWING_TREE_COUNT * LEAF_COUNT_PER_TREE * ATTRIBUTE_COUNT_PER_TREE
@@ -245,18 +245,18 @@ extern "C" void compute_node_split_decisions_host(
 
 
 extern "C" void node_split_host(
-        int *d_decision_trees,
-        int *d_is_leaf_active,
-        int *d_tree_active_status,
-        int *d_node_split_decisions,
-        int *d_leaf_counters,
-        int *d_leaf_class,
-        int *d_leaf_back,
-        int *d_leaf_id_range_end,
-        int *d_attribute_val_arr,
-        int *d_samples_seen_count,
-        int *d_cur_node_count_per_tree,
-        int *d_cur_leaf_count_per_tree) {
+        int* d_decision_trees,
+        int* d_is_leaf_active,
+        int* d_tree_active_status,
+        int* d_node_split_decisions,
+        int* d_leaf_counters,
+        int* d_leaf_class,
+        int* d_leaf_back,
+        int* d_leaf_id_range_end,
+        int* d_attribute_val_arr,
+        int* d_samples_seen_count,
+        int* d_cur_node_count_per_tree,
+        int* d_cur_leaf_count_per_tree) {
 
     node_split<<<GROWING_TREE_COUNT, LEAF_COUNT_PER_TREE>>>(
             d_decision_trees,
@@ -275,6 +275,43 @@ extern "C" void node_split_host(
             NODE_COUNT_PER_TREE,
             LEAF_COUNT_PER_TREE,
             ATTRIBUTE_COUNT_PER_TREE,
+            ATTRIBUTE_COUNT_TOTAL,
+            CLASS_COUNT);
+
+    gpuErrchk(cudaDeviceSynchronize());
+}
+
+extern "C" void reset_tree_host(
+        int* h_reset_tree_idx_arr,
+        int* d_reset_tree_idx_arr,
+        int reset_tree_count,
+        int* d_decision_trees,
+        int* d_leaf_counters,
+        int* d_leaf_class,
+        int* d_leaf_back,
+        int* d_leaf_id_range_end,
+        int* d_samples_seen_count,
+        int* d_cur_node_count_per_tree,
+        int* d_cur_leaf_count_per_tree,
+        int* d_tree_confusion_matrix) {
+
+    gpuErrchk(cudaMemcpy(d_reset_tree_idx_arr, h_reset_tree_idx_arr,
+                reset_tree_count * sizeof(int), cudaMemcpyHostToDevice));
+
+    reset_tree<<<1, reset_tree_count>>>(
+            d_reset_tree_idx_arr,
+            d_decision_trees,
+            d_leaf_counters,
+            d_leaf_class,
+            d_leaf_back,
+            d_leaf_id_range_end,
+            d_samples_seen_count,
+            d_cur_node_count_per_tree,
+            d_cur_leaf_count_per_tree,
+            d_tree_confusion_matrix,
+            NODE_COUNT_PER_TREE,
+            LEAF_COUNT_PER_TREE,
+            LEAF_COUNTER_SIZE,
             ATTRIBUTE_COUNT_TOTAL,
             CLASS_COUNT);
 

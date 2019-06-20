@@ -893,7 +893,6 @@ int main(int argc, char *argv[]) {
     setup_kernel<<<GROWING_TREE_COUNT, INSTANCE_COUNT_PER_TREE>>>(d_state);
     gpuErrchk(cudaDeviceSynchronize());
 
-    int leaf_counter_row_len = ATTRIBUTE_COUNT_TOTAL * 2;
     int iter_count = 1;
 
     int sample_count_iter = 0;
@@ -1181,11 +1180,10 @@ int main(int argc, char *argv[]) {
             cout << endl;
 
             // reset background trees
-            gpuErrchk(cudaMemcpy(d_warning_tree_idx_arr, h_warning_tree_bg_idx_arr,
-                        warning_tree_count * sizeof(int), cudaMemcpyHostToDevice));
-
-            reset_tree<<<1, warning_tree_count>>>(
+            reset_tree_host(
+                    h_warning_tree_bg_idx_arr,
                     d_warning_tree_idx_arr,
+                    warning_tree_count,
                     d_decision_trees,
                     d_leaf_counters,
                     d_leaf_class,
@@ -1194,15 +1192,7 @@ int main(int argc, char *argv[]) {
                     d_samples_seen_count,
                     d_cur_node_count_per_tree,
                     d_cur_leaf_count_per_tree,
-                    d_tree_confusion_matrix,
-                    NODE_COUNT_PER_TREE,
-                    LEAF_COUNT_PER_TREE,
-                    LEAF_COUNTER_SIZE,
-                    leaf_counter_row_len,
-                    confusion_matrix_size,
-                    CLASS_COUNT);
-
-            gpuErrchk(cudaDeviceSynchronize());
+                    d_tree_confusion_matrix);
         }
 
         if (warning_tree_count > 0 || drift_tree_count > 0) {
@@ -1637,11 +1627,10 @@ int main(int argc, char *argv[]) {
                 h_tree_active_status[bg_tree_forest_idx] = 2;
             }
 
-            gpuErrchk(cudaMemcpy(d_drift_tree_idx_arr, h_drift_tree_idx_arr,
-                        drift_tree_count * sizeof(int), cudaMemcpyHostToDevice));
-
-            reset_tree<<<1, drift_tree_count>>>(
+            reset_tree_host(
+                    h_drift_tree_idx_arr,
                     d_drift_tree_idx_arr,
+                    drift_tree_count,
                     d_decision_trees,
                     d_leaf_counters,
                     d_leaf_class,
@@ -1650,15 +1639,7 @@ int main(int argc, char *argv[]) {
                     d_samples_seen_count,
                     d_cur_node_count_per_tree,
                     d_cur_leaf_count_per_tree,
-                    d_tree_confusion_matrix,
-                    NODE_COUNT_PER_TREE,
-                    LEAF_COUNT_PER_TREE,
-                    LEAF_COUNTER_SIZE,
-                    leaf_counter_row_len,
-                    confusion_matrix_size,
-                    CLASS_COUNT);
-
-            gpuErrchk(cudaDeviceSynchronize());
+                    d_tree_confusion_matrix);
         }
 
         iter_count++;

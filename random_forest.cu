@@ -23,9 +23,6 @@
 
 using namespace std;
 
-#define EPS 1e-9
-#define IS_BIT_SET(val, pos) (val & (1 << pos))
-
 __global__ void setup_kernel(curandState *state) {
     int idx = threadIdx.x + blockDim.x * blockIdx.x;
     curand_init(42, idx, 0, &state[idx]);
@@ -82,11 +79,10 @@ __global__ void reset_tree(
         int max_node_count_per_tree,
         int max_leaf_count_per_tree,
         int leaf_counter_size,
-        int leaf_counter_row_len,
-        int confusion_matrix_size,
+        int attribute_count_total,
         int class_count) {
 
-    // <<<1, reseted_tree_count>>>
+    // <<<1, reset_tree_count>>>
 
     if (threadIdx.x >= blockDim.x) {
         return;
@@ -113,6 +109,7 @@ __global__ void reset_tree(
     }
 
     int *cur_leaf_counter = leaf_counters + tree_idx * max_leaf_count_per_tree * leaf_counter_size;
+    int leaf_counter_row_len = attribute_count_total * 2;
 
     for (int k = 0; k < class_count + 2; k++) {
         for (int ij = 0; ij < leaf_counter_row_len; ij++) {
