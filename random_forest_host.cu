@@ -39,12 +39,10 @@ extern "C" void tree_traversal_host(
         int* d_forest_vote_idx_arr,
         int* d_weights,
         int* d_tree_error_count,
-        int tree_error_count_len,
         int* d_confusion_matrix,
         int* d_tree_confusion_matrix,
         int* d_class_count_arr,
         int majority_class,
-        int confusion_matrix_size,
         curandState* d_state,
         int* class_count_arr,
         ofstream& log_file) {
@@ -56,9 +54,9 @@ extern "C" void tree_traversal_host(
                 * sizeof(int), cudaMemcpyHostToDevice));
 
     gpuErrchk(cudaMemset(d_correct_counter, 0, sizeof(int)));
-    gpuErrchk(cudaMemset(d_tree_error_count, 0, tree_error_count_len * sizeof(int)));
-    gpuErrchk(cudaMemset(d_confusion_matrix, 0, confusion_matrix_size * sizeof(int)));
-    gpuErrchk(cudaMemset(d_tree_confusion_matrix, 0, TREE_COUNT * confusion_matrix_size
+    gpuErrchk(cudaMemset(d_tree_error_count, 0, TREE_COUNT * sizeof(int)));
+    gpuErrchk(cudaMemset(d_confusion_matrix, 0, CLASS_COUNT * CLASS_COUNT * sizeof(int)));
+    gpuErrchk(cudaMemset(d_tree_confusion_matrix, 0, TREE_COUNT * CLASS_COUNT * CLASS_COUNT
                 * sizeof(int)));
 
     gpuErrchk(cudaMemset(d_is_leaf_active, 0, GROWING_TREE_COUNT * LEAF_COUNT_PER_TREE
@@ -98,7 +96,6 @@ extern "C" void tree_traversal_host(
             LEAF_COUNT_PER_TREE,
             ATTRIBUTE_COUNT_TOTAL,
             CLASS_COUNT,
-            confusion_matrix_size,
             d_state);
 
     gpuErrchk(cudaDeviceSynchronize());

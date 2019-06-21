@@ -139,7 +139,6 @@ __global__ void tree_traversal(
         int leaf_count_per_tree,
         int attribute_count_total,
         int class_count,
-        int confusion_matrix_size,
         curandState *state) {
     // <<<TREE_COUNT, INSTANCE_COUNT_PER_TREE>>>
 
@@ -166,7 +165,7 @@ __global__ void tree_traversal(
     int *cur_leaf_class = leaf_class + tree_idx * leaf_count_per_tree;
     int *cur_samples_seen_count = samples_seen_count + tree_idx * leaf_count_per_tree;
     int *cur_forest_vote = forest_vote + instance_idx * class_count;
-    int *cur_tree_confusion_matrix = tree_confusion_matrix + tree_idx * confusion_matrix_size;
+    int *cur_tree_confusion_matrix = tree_confusion_matrix + tree_idx * class_count * class_count;
 
     long pos = 0;
     while (!IS_BIT_SET(cur_decision_tree[pos], 31)) {
