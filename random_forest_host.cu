@@ -251,9 +251,7 @@ extern "C" void node_split_host(
         int* d_leaf_back,
         int* d_leaf_id_range_end,
         int* d_attribute_val_arr,
-        int* d_samples_seen_count,
-        int* d_cur_node_count_per_tree,
-        int* d_cur_leaf_count_per_tree) {
+        int* d_samples_seen_count) {
 
     node_split<<<GROWING_TREE_COUNT, LEAF_COUNT_PER_TREE>>>(
             d_decision_trees,
@@ -266,8 +264,6 @@ extern "C" void node_split_host(
             d_leaf_id_range_end,
             d_attribute_val_arr,
             d_samples_seen_count,
-            d_cur_node_count_per_tree,
-            d_cur_leaf_count_per_tree,
             LEAF_COUNTER_SIZE,
             NODE_COUNT_PER_TREE,
             LEAF_COUNT_PER_TREE,
@@ -288,8 +284,6 @@ extern "C" void reset_tree_host(
         int* d_leaf_back,
         int* d_leaf_id_range_end,
         int* d_samples_seen_count,
-        int* d_cur_node_count_per_tree,
-        int* d_cur_leaf_count_per_tree,
         int* d_tree_confusion_matrix) {
 
     gpuErrchk(cudaMemcpy(d_reset_tree_idx_arr, h_reset_tree_idx_arr,
@@ -303,8 +297,6 @@ extern "C" void reset_tree_host(
             d_leaf_back,
             d_leaf_id_range_end,
             d_samples_seen_count,
-            d_cur_node_count_per_tree,
-            d_cur_leaf_count_per_tree,
             d_tree_confusion_matrix,
             NODE_COUNT_PER_TREE,
             LEAF_COUNT_PER_TREE,

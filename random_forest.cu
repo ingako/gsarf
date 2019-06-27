@@ -73,8 +73,6 @@ __global__ void reset_tree(
         int *leaf_back,
         int *leaf_id_range_end,
         int *samples_seen_count,
-        int *node_count_per_tree,
-        int *leaf_count_per_tree,
         int *tree_confusion_matrix,
         int max_node_count_per_tree,
         int max_leaf_count_per_tree,
@@ -89,10 +87,6 @@ __global__ void reset_tree(
     }
 
     int tree_idx = reseted_tree_idx_arr[threadIdx.x];
-
-    node_count_per_tree[tree_idx] = 1;
-    leaf_count_per_tree[tree_idx] = 1;
-
     int* cur_decision_tree = decision_trees + tree_idx * max_node_count_per_tree;
     int* cur_leaf_class = leaf_class + tree_idx * max_leaf_count_per_tree;
     int* cur_leaf_back = leaf_back + tree_idx * max_leaf_count_per_tree;
@@ -557,8 +551,6 @@ __global__ void node_split(
         int *leaf_id_range_end,
         int *attribute_val_arr,
         int *samples_seen_count,
-        int *cur_node_count_per_tree,
-        int *cur_leaf_count_per_tree,
         int counter_size_per_leaf,
         int max_node_count_per_tree,
         int max_leaf_count_per_tree,

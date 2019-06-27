@@ -50,8 +50,6 @@ struct tree_t {
     int* leaf_back = nullptr;
     int* leaf_id_range_end = nullptr;
     int* leaf_counter = nullptr;
-    int* cur_node_count_per_tree = nullptr;
-    int* cur_leaf_count_per_tree = nullptr;
     int* samples_seen_count = nullptr;
 };
 
