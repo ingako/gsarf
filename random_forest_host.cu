@@ -266,29 +266,23 @@ extern "C" void node_split_host(
 }
 
 extern "C" void reset_tree_host(
+        forest_t d_forest,
         int* h_reset_tree_idx_arr,
         int* d_reset_tree_idx_arr,
-        int reset_tree_count,
-        int* d_decision_trees,
-        int* d_leaf_counters,
-        int* d_leaf_class,
-        int* d_leaf_back,
-        int* d_leaf_id_range_end,
-        int* d_samples_seen_count,
-        int* d_tree_confusion_matrix) {
+        int reset_tree_count) {
 
     gpuErrchk(cudaMemcpy(d_reset_tree_idx_arr, h_reset_tree_idx_arr,
                 reset_tree_count * sizeof(int), cudaMemcpyHostToDevice));
 
     reset_tree<<<1, reset_tree_count>>>(
             d_reset_tree_idx_arr,
-            d_decision_trees,
-            d_leaf_counters,
-            d_leaf_class,
-            d_leaf_back,
-            d_leaf_id_range_end,
-            d_samples_seen_count,
-            d_tree_confusion_matrix,
+            d_forest.decision_trees,
+            d_forest.leaf_counters,
+            d_forest.leaf_class,
+            d_forest.leaf_back,
+            d_forest.leaf_id_range_end,
+            d_forest.samples_seen_count,
+            d_forest.tree_confusion_matrices,
             NODE_COUNT_PER_TREE,
             LEAF_COUNT_PER_TREE,
             LEAF_COUNTER_SIZE,

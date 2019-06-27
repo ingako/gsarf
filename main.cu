@@ -1064,16 +1064,10 @@ int main(int argc, char *argv[]) {
 
             // reset background trees
             reset_tree_host(
+                    d_forest,
                     h_warning_tree_bg_idx_arr,
                     d_warning_tree_idx_arr,
-                    warning_tree_count,
-                    d_decision_trees,
-                    d_leaf_counters,
-                    d_leaf_class,
-                    d_leaf_back,
-                    d_leaf_id_range_end,
-                    d_samples_seen_count,
-                    d_tree_confusion_matrix);
+                    warning_tree_count);
         }
 
         if (warning_tree_count > 0 || drift_tree_count > 0) {
@@ -1465,16 +1459,10 @@ int main(int argc, char *argv[]) {
             }
 
             reset_tree_host(
+                    d_forest,
                     h_drift_tree_idx_arr,
                     d_drift_tree_idx_arr,
-                    drift_tree_count,
-                    d_decision_trees,
-                    d_leaf_counters,
-                    d_leaf_class,
-                    d_leaf_back,
-                    d_leaf_id_range_end,
-                    d_samples_seen_count,
-                    d_tree_confusion_matrix);
+                    drift_tree_count);
         }
 
         iter_count++;

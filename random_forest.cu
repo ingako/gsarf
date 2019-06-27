@@ -74,8 +74,8 @@ __global__ void reset_tree(
         int *leaf_id_range_end,
         int *samples_seen_count,
         int *tree_confusion_matrix,
-        int max_node_count_per_tree,
-        int max_leaf_count_per_tree,
+        int node_count_per_tree,
+        int leaf_count_per_tree,
         int leaf_counter_size,
         int attribute_count_total,
         int class_count) {
@@ -87,22 +87,22 @@ __global__ void reset_tree(
     }
 
     int tree_idx = reseted_tree_idx_arr[threadIdx.x];
-    int* cur_decision_tree = decision_trees + tree_idx * max_node_count_per_tree;
-    int* cur_leaf_class = leaf_class + tree_idx * max_leaf_count_per_tree;
-    int* cur_leaf_back = leaf_back + tree_idx * max_leaf_count_per_tree;
-    int* cur_leaf_id_range_end = leaf_id_range_end + tree_idx * max_leaf_count_per_tree;
-    int* cur_samples_seen_count = samples_seen_count + tree_idx * max_leaf_count_per_tree;
+    int* cur_decision_tree = decision_trees + tree_idx * node_count_per_tree;
+    int* cur_leaf_class = leaf_class + tree_idx * leaf_count_per_tree;
+    int* cur_leaf_back = leaf_back + tree_idx * leaf_count_per_tree;
+    int* cur_leaf_id_range_end = leaf_id_range_end + tree_idx * leaf_count_per_tree;
+    int* cur_samples_seen_count = samples_seen_count + tree_idx * leaf_count_per_tree;
 
     cur_decision_tree[0] = (1 << 31);
     cur_leaf_class[0] = 0;
     cur_leaf_back[0] = 0;
-    cur_leaf_id_range_end[0] = max_leaf_count_per_tree;
+    cur_leaf_id_range_end[0] = leaf_count_per_tree;
 
-    for (int i = 0; i < max_leaf_count_per_tree; i++) {
+    for (int i = 0; i < leaf_count_per_tree; i++) {
         cur_samples_seen_count[i] = 0;
     }
 
-    int *cur_leaf_counter = leaf_counters + tree_idx * max_leaf_count_per_tree * leaf_counter_size;
+    int *cur_leaf_counter = leaf_counters + tree_idx * leaf_count_per_tree * leaf_counter_size;
     int leaf_counter_row_len = attribute_count_total * 2;
 
     for (int k = 0; k < class_count + 2; k++) {
@@ -552,8 +552,8 @@ __global__ void node_split(
         int* node_split_decisions,
         int* attribute_val_arr,
         int counter_size_per_leaf,
-        int max_node_count_per_tree,
-        int max_leaf_count_per_tree,
+        int node_count_per_tree,
+        int leaf_count_per_tree,
         int attribute_count_per_tree,
         int attribute_count_total,
         int class_count) {
@@ -569,7 +569,7 @@ __global__ void node_split(
         return;
     }
 
-    if (is_leaf_active[tree_idx * max_leaf_count_per_tree + leaf_idx] != 1) {
+    if (is_leaf_active[tree_idx * leaf_count_per_tree + leaf_idx] != 1) {
         return;
     }
 
@@ -580,10 +580,10 @@ __global__ void node_split(
         return;
     }
 
-    int *cur_decision_tree = decision_trees + tree_idx * max_node_count_per_tree;
+    int *cur_decision_tree = decision_trees + tree_idx * node_count_per_tree;
 
     int *cur_node_split_decisions = node_split_decisions + tree_idx *
-        max_leaf_count_per_tree;
+        leaf_count_per_tree;
 
     int decision = cur_node_split_decisions[leaf_idx];
 
@@ -594,12 +594,12 @@ __global__ void node_split(
     int attribute_id = (decision & ~(1 << 31)); // the attribute to split on
 
     int *cur_tree_leaf_counters = leaf_counters +
-        tree_idx * max_leaf_count_per_tree * counter_size_per_leaf;
+        tree_idx * leaf_count_per_tree * counter_size_per_leaf;
     int *cur_leaf_counter = cur_tree_leaf_counters + leaf_idx * counter_size_per_leaf;
 
-    int *cur_leaf_back = leaf_back + tree_idx * max_leaf_count_per_tree;
-    int *cur_leaf_class = leaf_class + tree_idx * max_leaf_count_per_tree;
-    int *cur_leaf_id_range_end = leaf_id_range_end + tree_idx * max_leaf_count_per_tree;
+    int *cur_leaf_back = leaf_back + tree_idx * leaf_count_per_tree;
+    int *cur_leaf_class = leaf_class + tree_idx * leaf_count_per_tree;
+    int *cur_leaf_id_range_end = leaf_id_range_end + tree_idx * leaf_count_per_tree;
 
     int cur_leaf_pos_in_tree = cur_leaf_back[leaf_idx];
     int cur_leaf_val = cur_decision_tree[cur_leaf_pos_in_tree];
@@ -624,7 +624,7 @@ __global__ void node_split(
     cur_leaf_id_range_end[old_leaf_id] = leaf_id_range_mid;
     cur_leaf_id_range_end[new_leaf_id] = old_leaf_id_range_end;
 
-    int *cur_samples_seen_count = samples_seen_count + tree_idx * max_leaf_count_per_tree;
+    int *cur_samples_seen_count = samples_seen_count + tree_idx * leaf_count_per_tree;
 
     cur_samples_seen_count[old_leaf_id] = 0;
     cur_samples_seen_count[new_leaf_id] = 0;
@@ -632,8 +632,8 @@ __global__ void node_split(
     long left_leaf_pos = get_left(cur_leaf_pos_in_tree);
     long right_leaf_pos = get_right(cur_leaf_pos_in_tree);
 
-    if (left_leaf_pos >= max_node_count_per_tree
-            || right_leaf_pos >= max_node_count_per_tree) {
+    if (left_leaf_pos >= node_count_per_tree
+            || right_leaf_pos >= node_count_per_tree) {
         return;
     }
 
