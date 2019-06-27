@@ -189,23 +189,45 @@ void evaluate(
     }
 }
 
-void tree_memcpy(tree_t *from_tree, tree_t *to_tree, bool is_background_tree) {
+void tree_memcpy(
+        forest_t& from_forest,
+        int from_tree_idx,
+        forest_t& to_forest,
+        int to_tree_idx,
+        bool is_background_tree) {
 
-    memcpy(to_tree->tree, from_tree->tree, NODE_COUNT_PER_TREE * sizeof(int));
+    tree_t from_tree = {
+        from_forest.decision_trees + from_tree_idx * NODE_COUNT_PER_TREE,
+        from_forest.leaf_class + from_tree_idx * LEAF_COUNT_PER_TREE,
+        from_forest.leaf_back + from_tree_idx * LEAF_COUNT_PER_TREE,
+        from_forest.leaf_id_range_end + from_tree_idx * LEAF_COUNT_PER_TREE,
+        from_forest.leaf_counters + from_tree_idx * LEAF_COUNTERS_SIZE_PER_TREE,
+        from_forest.samples_seen_count + from_tree_idx * LEAF_COUNT_PER_TREE
+    };
 
-    memcpy(to_tree->leaf_class, from_tree->leaf_class, LEAF_COUNT_PER_TREE * sizeof(int));
+    tree_t to_tree = {
+        to_forest.decision_trees + to_tree_idx * NODE_COUNT_PER_TREE,
+        to_forest.leaf_class + to_tree_idx * LEAF_COUNT_PER_TREE,
+        to_forest.leaf_back + to_tree_idx * LEAF_COUNT_PER_TREE,
+        to_forest.leaf_id_range_end + to_tree_idx * LEAF_COUNT_PER_TREE,
+        to_forest.leaf_counters + to_tree_idx * LEAF_COUNTERS_SIZE_PER_TREE,
+        to_forest.samples_seen_count + to_tree_idx * LEAF_COUNT_PER_TREE
+    };
 
-    memcpy(to_tree->leaf_back, from_tree->leaf_back, LEAF_COUNT_PER_TREE * sizeof(int));
+    memcpy(to_tree.tree, from_tree.tree, NODE_COUNT_PER_TREE * sizeof(int));
 
-    memcpy(to_tree->leaf_id_range_end, from_tree->leaf_id_range_end,
+    memcpy(to_tree.leaf_class, from_tree.leaf_class, LEAF_COUNT_PER_TREE * sizeof(int));
+
+    memcpy(to_tree.leaf_back, from_tree.leaf_back, LEAF_COUNT_PER_TREE * sizeof(int));
+
+    memcpy(to_tree.leaf_id_range_end, from_tree.leaf_id_range_end,
             LEAF_COUNT_PER_TREE * sizeof(int));
 
     if (is_background_tree) {
-        memcpy(to_tree->leaf_counter, from_tree->leaf_counter,
+        memcpy(to_tree.leaf_counter, from_tree.leaf_counter,
                 LEAF_COUNTERS_SIZE_PER_TREE * sizeof(int));
 
-        memcpy(to_tree->samples_seen_count,
-                from_tree->samples_seen_count,
+        memcpy(to_tree.samples_seen_count, from_tree.samples_seen_count,
                 LEAF_COUNT_PER_TREE * sizeof(int));
     }
 }
@@ -772,31 +794,23 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    vector<tree_t> h_forest;
-    for (int tree_idx = 0; tree_idx < TREE_COUNT; tree_idx++) {
-        tree_t cur_tree = {
-            h_decision_trees + tree_idx * NODE_COUNT_PER_TREE,
-            h_leaf_class + tree_idx * LEAF_COUNT_PER_TREE,
-            h_leaf_back + tree_idx * LEAF_COUNT_PER_TREE,
-            h_leaf_id_range_end + tree_idx * LEAF_COUNT_PER_TREE,
-            h_leaf_counters + tree_idx * LEAF_COUNTERS_SIZE_PER_TREE,
-            h_samples_seen_count + tree_idx * LEAF_COUNT_PER_TREE,
-        };
-        h_forest.push_back(cur_tree);
-    }
+    forest_t h_forest = {
+        h_decision_trees,
+        h_leaf_class,
+        h_leaf_back,
+        h_leaf_id_range_end,
+        h_leaf_counters,
+        h_samples_seen_count,
+    };
 
-    vector<tree_t> cpu_forest;
-    for (int tree_id = 0; tree_id < CPU_TREE_POOL_SIZE; tree_id++) {
-        tree_t cur_tree = {
-            cpu_decision_trees + tree_id * NODE_COUNT_PER_TREE,
-            cpu_leaf_class + tree_id * LEAF_COUNT_PER_TREE,
-            cpu_leaf_back + tree_id * LEAF_COUNT_PER_TREE,
-            cpu_leaf_id_range_end + tree_id * LEAF_COUNT_PER_TREE,
-            cpu_leaf_counters + tree_id * LEAF_COUNTERS_SIZE_PER_TREE,
-            cpu_samples_seen_count + tree_id * LEAF_COUNT_PER_TREE,
-        };
-        cpu_forest.push_back(cur_tree);
-    }
+    forest_t cpu_tree_pool = {
+        cpu_decision_trees,
+        cpu_leaf_class,
+        cpu_leaf_back,
+        cpu_leaf_id_range_end,
+        cpu_leaf_counters,
+        cpu_samples_seen_count,
+    };
 
 
     log_file << "\nInitializing training data arrays..." << endl;
@@ -1121,7 +1135,7 @@ int main(int argc, char *argv[]) {
                         candidate_t candidate = candidate_t(i, next_avail_forest_idx);
                         forest_candidate_vec.push_back(candidate);
 
-                        tree_memcpy(&cpu_forest[i], &h_forest[next_avail_forest_idx],
+                        tree_memcpy(cpu_tree_pool, i, h_forest, next_avail_forest_idx,
                                 false);
 
                         h_tree_active_status[next_avail_forest_idx] = 5;
@@ -1267,7 +1281,8 @@ int main(int argc, char *argv[]) {
 
 #if DEBUG
                         cout << "best_candiate.tree_id: " << best_candidate.tree_id << endl;
-                        int* cur_tree = cpu_forest[best_candidate.tree_id].tree;
+                        int* cur_tree = cpu_tree_pool.decision_trees + best_candidate.tree_id *
+                            NODE_COUNT_PER_TREE;
                         for (int node_idx = 0; node_idx < NODE_COUNT_PER_TREE; node_idx++) {
                             cout << cur_tree[node_idx] << ",";
                         }
@@ -1308,19 +1323,19 @@ int main(int argc, char *argv[]) {
 
 
                 // put drift tree back to cpu tree pool
-                tree_memcpy(&h_forest[forest_tree_idx], &cpu_forest[tree_id], true);
+                tree_memcpy(h_forest, forest_tree_idx, cpu_tree_pool, tree_id, true);
 
                 tree_id_to_forest_idx[tree_id] = -1;
 
                 if (forest_swap_tree_idx == -1) {
 
                     // replace drift tree with its background tree
-                    tree_memcpy(&h_forest[forest_bg_tree_idx], &h_forest[forest_tree_idx], true);
+                    tree_memcpy(h_forest, forest_bg_tree_idx, h_forest, forest_tree_idx, true);
 
                     if (add_bg_tree) {
                         // add background tree to cpu_tree_pool
                         int new_tree_id = cur_tree_pool_size;
-                        tree_memcpy(&h_forest[forest_bg_tree_idx], &cpu_forest[new_tree_id], true);
+                        tree_memcpy(h_forest, forest_bg_tree_idx, cpu_tree_pool, new_tree_id, true);
                         forest_idx_to_tree_id[forest_tree_idx] = new_tree_id;
                         tree_id_to_forest_idx[new_tree_id] = forest_tree_idx;
 
@@ -1365,8 +1380,8 @@ int main(int argc, char *argv[]) {
 #endif
 
                     // replace drift tree with its candidate tree
-                    tree_memcpy(&cpu_forest[best_candidate.tree_id],
-                            &h_forest[forest_tree_idx], true);
+                    tree_memcpy(cpu_tree_pool, best_candidate.tree_id, h_forest,
+                            forest_tree_idx, true);
 
                     tree_id_to_forest_idx[best_candidate.tree_id] = forest_tree_idx;
                     forest_idx_to_tree_id[forest_tree_idx] = best_candidate.tree_id;

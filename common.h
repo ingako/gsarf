@@ -44,6 +44,16 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=t
     }
 }
 
+struct forest_t {
+    int* decision_trees = nullptr;
+    int* leaf_class = nullptr;
+    int* leaf_back = nullptr;
+    int* leaf_id_range_end = nullptr;
+    int* leaf_counters = nullptr;
+    int* samples_seen_count = nullptr;
+    int* tree_confusion_matrices = nullptr;
+};
+
 struct tree_t {
     int* tree = nullptr;
     int* leaf_class = nullptr;
