@@ -44,6 +44,22 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=t
     }
 }
 
+template <typename T>
+bool allocate_memory_on_device(T **arr, string arr_name, int count) {
+    size_t memory_size = count * sizeof(T);
+    // cout << "\nAllocating " << memory_size << " bytes for " << arr_name << " on device..." << endl;
+
+    cudaError_t err = cudaMalloc((void **) arr, memory_size); // allocate global memory on the device
+    if (err != cudaSuccess) {
+        // cout << "error allocating memory for " << arr_name << " on device: " << memory_size << " bytes" << endl;
+        return false;
+    } else {
+        gpuErrchk(cudaMemset(*arr, 0, memory_size));
+        // cout << "device: memory for " << arr_name << " allocated successfully." << endl;
+        return true;
+    }
+}
+
 struct forest_t {
     int* decision_trees = nullptr;
     int* leaf_class = nullptr;
