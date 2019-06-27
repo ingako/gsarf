@@ -786,22 +786,6 @@ int main(int argc, char *argv[]) {
     gpuErrchk(cudaMemcpy(d_tree_active_status, h_tree_active_status,
                 TREE_COUNT * sizeof(int), cudaMemcpyHostToDevice));
 
-#if DEBUG
-
-    cout << "initial cur_state: ";
-    for (int i = 0; i < cur_state.size(); i++) {
-        cout << cur_state[i];
-    }
-    cout << endl;
-
-    cout << "tree active status: ";
-    for (int i = 0; i < TREE_COUNT; i++) {
-        cout << h_tree_active_status[i] << " ";
-    }
-    cout << endl;
-
-#endif
-
 
     // for calculating kappa measurements
     int* h_confusion_matrix = (int*) malloc(CLASS_COUNT * CLASS_COUNT * sizeof(int));
@@ -913,7 +897,7 @@ int main(int argc, char *argv[]) {
         log_file << "\nlaunching tree_traversal kernel..." << endl;
 
         tree_traversal_host(
-            d_decision_trees,
+            d_forest,
             h_tree_active_status,
             d_tree_active_status,
             h_data,
@@ -921,9 +905,7 @@ int main(int argc, char *argv[]) {
             data_len,
             d_reached_leaf_ids,
             d_is_leaf_active,
-            d_leaf_class,
             d_correct_counter,
-            d_samples_seen_count,
             d_forest_vote,
             forest_vote_len,
             h_forest_vote_idx_arr,
@@ -931,7 +913,6 @@ int main(int argc, char *argv[]) {
             d_weights,
             d_tree_error_count,
             d_confusion_matrix,
-            d_tree_confusion_matrix,
             d_class_count_arr,
             majority_class,
             d_state,
@@ -992,7 +973,7 @@ int main(int argc, char *argv[]) {
         log_file << "\nlaunching counter_increase kernel..." << endl;
 
         counter_increase_host(
-                d_leaf_counters,
+                d_forest,
                 d_tree_active_status,
                 d_reached_leaf_ids,
                 d_data,
@@ -1004,11 +985,10 @@ int main(int argc, char *argv[]) {
         log_file << "\nlanuching compute_information_gain kernel..." << endl;
 
         compute_information_gain_host(
-                d_leaf_counters,
+                d_forest,
                 d_is_leaf_active,
                 h_tree_active_status,
                 d_tree_active_status,
-                d_leaf_class,
                 d_info_gain_vals,
                 h_attribute_val_arr,
                 d_attribute_val_arr);
@@ -1035,16 +1015,11 @@ int main(int argc, char *argv[]) {
         log_file << "\nlaunching node_split kernel..." << endl;
 
         node_split_host(
-                d_decision_trees,
+                d_forest,
                 d_is_leaf_active,
                 d_tree_active_status,
                 d_node_split_decisions,
-                d_leaf_counters,
-                d_leaf_class,
-                d_leaf_back,
-                d_leaf_id_range_end,
-                d_attribute_val_arr,
-                d_samples_seen_count);
+                d_attribute_val_arr);
 
         log_file << "node_split completed" << endl;
 

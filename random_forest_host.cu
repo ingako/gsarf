@@ -22,7 +22,7 @@
 using namespace std;
 
 extern "C" void tree_traversal_host(
-        int* d_decision_trees,
+        forest_t& d_forest,
         int* h_tree_active_status,
         int* d_tree_active_status,
         int* h_data,
@@ -30,9 +30,7 @@ extern "C" void tree_traversal_host(
         int data_len,
         int* d_reached_leaf_ids,
         int* d_is_leaf_active,
-        int* d_leaf_class,
         int* d_correct_counter,
-        int* d_samples_seen_count,
         int* d_forest_vote,
         int forest_vote_len,
         int* h_forest_vote_idx_arr,
@@ -40,7 +38,6 @@ extern "C" void tree_traversal_host(
         int* d_weights,
         int* d_tree_error_count,
         int* d_confusion_matrix,
-        int* d_tree_confusion_matrix,
         int* d_class_count_arr,
         int majority_class,
         curandState* d_state,
@@ -56,7 +53,7 @@ extern "C" void tree_traversal_host(
     gpuErrchk(cudaMemset(d_correct_counter, 0, sizeof(int)));
     gpuErrchk(cudaMemset(d_tree_error_count, 0, TREE_COUNT * sizeof(int)));
     gpuErrchk(cudaMemset(d_confusion_matrix, 0, CLASS_COUNT * CLASS_COUNT * sizeof(int)));
-    gpuErrchk(cudaMemset(d_tree_confusion_matrix, 0, TREE_COUNT * CLASS_COUNT * CLASS_COUNT
+    gpuErrchk(cudaMemset(d_forest.tree_confusion_matrices, 0, TREE_COUNT * CLASS_COUNT * CLASS_COUNT
                 * sizeof(int)));
 
     gpuErrchk(cudaMemset(d_is_leaf_active, 0, GROWING_TREE_COUNT * LEAF_COUNT_PER_TREE
@@ -76,20 +73,20 @@ extern "C" void tree_traversal_host(
     gpuErrchk(cudaDeviceSynchronize());
 
     tree_traversal<<<block_count, thread_count>>>(
-            d_decision_trees,
+            d_forest.decision_trees,
+            d_forest.leaf_class,
+            d_forest.samples_seen_count,
+            d_forest.tree_confusion_matrices,
             d_tree_active_status,
             d_data,
             d_reached_leaf_ids,
             d_is_leaf_active,
-            d_leaf_class,
             d_correct_counter,
-            d_samples_seen_count,
             d_forest_vote,
             d_forest_vote_idx_arr,
             d_weights,
             d_tree_error_count,
             d_confusion_matrix,
-            d_tree_confusion_matrix,
             d_class_count_arr,
             majority_class,
             NODE_COUNT_PER_TREE,
@@ -103,7 +100,7 @@ extern "C" void tree_traversal_host(
 }
 
 extern "C" void counter_increase_host(
-        int* d_leaf_counters,
+        forest_t& d_forest,
         int* d_tree_active_status,
         int* d_reached_leaf_ids,
         int* d_data,
@@ -111,7 +108,7 @@ extern "C" void counter_increase_host(
 
     counter_increase
         <<<dim3(GROWING_TREE_COUNT, INSTANCE_COUNT_PER_TREE), ATTRIBUTE_COUNT_TOTAL>>>(
-                d_leaf_counters,
+                d_forest.leaf_counters,
                 d_tree_active_status,
                 d_reached_leaf_ids,
                 d_data,
@@ -125,11 +122,10 @@ extern "C" void counter_increase_host(
 }
 
 extern "C" void compute_information_gain_host(
-        int* d_leaf_counters,
+        forest_t& d_forest,
         int* d_is_leaf_active,
         int* h_tree_active_status,
         int* d_tree_active_status,
-        int* d_leaf_class,
         float* d_info_gain_vals,
         int* h_attribute_val_arr,
         int* d_attribute_val_arr) {
@@ -162,10 +158,10 @@ extern "C" void compute_information_gain_host(
     int thread_count = ATTRIBUTE_COUNT_PER_TREE * 2;
 
     compute_information_gain<<<grid, thread_count>>>(
-            d_leaf_counters,
+            d_forest.leaf_counters,
+            d_forest.leaf_class,
             d_is_leaf_active,
             d_tree_active_status,
-            d_leaf_class,
             d_info_gain_vals,
             d_attribute_val_arr,
             ATTRIBUTE_COUNT_PER_TREE,
@@ -242,28 +238,23 @@ extern "C" void compute_node_split_decisions_host(
 
 
 extern "C" void node_split_host(
-        int* d_decision_trees,
+        forest_t& d_forest,
         int* d_is_leaf_active,
         int* d_tree_active_status,
         int* d_node_split_decisions,
-        int* d_leaf_counters,
-        int* d_leaf_class,
-        int* d_leaf_back,
-        int* d_leaf_id_range_end,
-        int* d_attribute_val_arr,
-        int* d_samples_seen_count) {
+        int* d_attribute_val_arr) {
 
     node_split<<<GROWING_TREE_COUNT, LEAF_COUNT_PER_TREE>>>(
-            d_decision_trees,
+            d_forest.decision_trees,
+            d_forest.leaf_counters,
+            d_forest.leaf_class,
+            d_forest.leaf_back,
+            d_forest.leaf_id_range_end,
+            d_forest.samples_seen_count,
             d_is_leaf_active,
             d_tree_active_status,
             d_node_split_decisions,
-            d_leaf_counters,
-            d_leaf_class,
-            d_leaf_back,
-            d_leaf_id_range_end,
             d_attribute_val_arr,
-            d_samples_seen_count,
             LEAF_COUNTER_SIZE,
             NODE_COUNT_PER_TREE,
             LEAF_COUNT_PER_TREE,
