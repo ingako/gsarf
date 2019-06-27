@@ -232,6 +232,32 @@ void tree_memcpy(
     }
 }
 
+void forest_data_transfer(forest_t& from_forest, forest_t& to_forest, cudaMemcpyKind direction) {
+
+    gpuErrchk(cudaMemcpy(from_forest.decision_trees, to_forest.decision_trees, TREE_COUNT
+                * NODE_COUNT_PER_TREE * sizeof(int), direction));
+
+    gpuErrchk(cudaMemcpy(from_forest.leaf_class, to_forest.leaf_class, TREE_COUNT
+                * LEAF_COUNT_PER_TREE * sizeof(int), direction));
+
+    gpuErrchk(cudaMemcpy(from_forest.leaf_back, to_forest.leaf_back, TREE_COUNT
+                * LEAF_COUNT_PER_TREE * sizeof(int), direction));
+
+    gpuErrchk(cudaMemcpy(from_forest.leaf_id_range_end, to_forest.leaf_id_range_end, TREE_COUNT
+                * LEAF_COUNT_PER_TREE * sizeof(int), direction));
+
+    gpuErrchk(cudaMemcpy(from_forest.leaf_counters, to_forest.leaf_counters,
+                ALL_LEAF_COUNTERS_SIZE * sizeof(int), direction));
+
+    gpuErrchk(cudaMemcpy(from_forest.samples_seen_count, to_forest.samples_seen_count,
+                GROWING_TREE_COUNT * LEAF_COUNT_PER_TREE * sizeof(int), direction));
+
+    if (direction == cudaMemcpyDeviceToHost) {
+        gpuErrchk(cudaMemcpy(from_forest.tree_confusion_matrices, to_forest.tree_confusion_matrices,
+                    TREE_COUNT * CLASS_COUNT * CLASS_COUNT * sizeof(int), direction));
+    }
+}
+
 int main(int argc, char *argv[]) {
 
     TREE_COUNT = 1;
@@ -801,6 +827,17 @@ int main(int argc, char *argv[]) {
         h_leaf_id_range_end,
         h_leaf_counters,
         h_samples_seen_count,
+        h_tree_confusion_matrix
+    };
+
+    forest_t d_forest = {
+        d_decision_trees,
+        d_leaf_class,
+        d_leaf_back,
+        d_leaf_id_range_end,
+        d_leaf_counters,
+        d_samples_seen_count,
+        d_tree_confusion_matrix
     };
 
     forest_t cpu_tree_pool = {
@@ -809,7 +846,7 @@ int main(int argc, char *argv[]) {
         cpu_leaf_back,
         cpu_leaf_id_range_end,
         cpu_leaf_counters,
-        cpu_samples_seen_count,
+        cpu_samples_seen_count
     };
 
 
@@ -1065,22 +1102,7 @@ int main(int argc, char *argv[]) {
         }
 
         if (warning_tree_count > 0 || drift_tree_count > 0) {
-
-            gpuErrchk(cudaMemcpy(h_decision_trees, d_decision_trees, TREE_COUNT
-                        * NODE_COUNT_PER_TREE * sizeof(int), cudaMemcpyDeviceToHost));
-            gpuErrchk(cudaMemcpy(h_leaf_class, d_leaf_class, TREE_COUNT
-                        * LEAF_COUNT_PER_TREE * sizeof(int), cudaMemcpyDeviceToHost));
-            gpuErrchk(cudaMemcpy(h_leaf_back, d_leaf_back, TREE_COUNT
-                        * LEAF_COUNT_PER_TREE * sizeof(int), cudaMemcpyDeviceToHost));
-            gpuErrchk(cudaMemcpy(h_leaf_id_range_end, d_leaf_id_range_end, TREE_COUNT
-                        * LEAF_COUNT_PER_TREE * sizeof(int), cudaMemcpyDeviceToHost));
-            gpuErrchk(cudaMemcpy(h_leaf_counters, d_leaf_counters,
-                        ALL_LEAF_COUNTERS_SIZE * sizeof(int), cudaMemcpyDeviceToHost));
-            gpuErrchk(cudaMemcpy(h_samples_seen_count, d_samples_seen_count,
-                        GROWING_TREE_COUNT * LEAF_COUNT_PER_TREE * sizeof(int), cudaMemcpyDeviceToHost));
-            gpuErrchk(cudaMemcpy(h_tree_confusion_matrix, d_tree_confusion_matrix,
-                        TREE_COUNT * CLASS_COUNT * CLASS_COUNT * sizeof(int), cudaMemcpyDeviceToHost));
-
+            forest_data_transfer(h_forest, d_forest, cudaMemcpyDeviceToHost);
         }
 
 
@@ -1456,20 +1478,7 @@ int main(int argc, char *argv[]) {
 
 
         if (warning_tree_count > 0 || drift_tree_count > 0) {
-
-            gpuErrchk(cudaMemcpy(d_decision_trees, h_decision_trees, NODE_COUNT_PER_TREE
-                        * TREE_COUNT * sizeof(int), cudaMemcpyHostToDevice));
-            gpuErrchk(cudaMemcpy(d_leaf_class, h_leaf_class, TREE_COUNT
-                        * LEAF_COUNT_PER_TREE * sizeof(int), cudaMemcpyHostToDevice));
-            gpuErrchk(cudaMemcpy(d_leaf_back, h_leaf_back, TREE_COUNT
-                        * LEAF_COUNT_PER_TREE * sizeof(int), cudaMemcpyHostToDevice));
-            gpuErrchk(cudaMemcpy(d_leaf_id_range_end, h_leaf_id_range_end, TREE_COUNT
-                        * LEAF_COUNT_PER_TREE * sizeof(int), cudaMemcpyHostToDevice));
-            gpuErrchk(cudaMemcpy(d_leaf_counters, h_leaf_counters,
-                        ALL_LEAF_COUNTERS_SIZE * sizeof(int), cudaMemcpyHostToDevice));
-            gpuErrchk(cudaMemcpy(d_samples_seen_count, h_samples_seen_count,
-                        GROWING_TREE_COUNT * LEAF_COUNT_PER_TREE * sizeof(int), cudaMemcpyHostToDevice));
-
+            forest_data_transfer(d_forest, h_forest,  cudaMemcpyHostToDevice);
         }
 
         if (drift_tree_count > 0) {
