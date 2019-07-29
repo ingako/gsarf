@@ -16,12 +16,12 @@
 #include <curand.h>
 #include <curand_kernel.h>
 
-#include "ADWIN.cu"
-#include "LRU_state.cu"
+#include "ADWIN.h"
+#include "LRU_state.cpp"
 
 #include "common.h"
-#include "random_forest_host.cu"
-#include "state_adaptive_algorithm.cu"
+#include "random_forest_host.cuh"
+#include "state_adaptive_algorithm.cpp"
 
 using namespace std;
 
@@ -772,8 +772,7 @@ int main(int argc, char *argv[]) {
     curandState *d_state;
     cudaMalloc(&d_state, GROWING_TREE_COUNT * INSTANCE_COUNT_PER_TREE * sizeof(curandState));
 
-    setup_kernel<<<GROWING_TREE_COUNT, INSTANCE_COUNT_PER_TREE>>>(d_state);
-    gpuErrchk(cudaDeviceSynchronize());
+    setup_kernel_host(d_state);
 
     int iter_count = 1;
 

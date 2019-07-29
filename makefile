@@ -1,8 +1,5 @@
 all:
-	nvcc -o main.o src/main.cu --std=c++14 
-
-debug:
-	nvcc -o main.o src/main.cu --std=c++14 -DDEBUG=1 -g -lineinfo
+	nvcc -O3 -o main.o src/main.cpp src/*.cu
 
 clean:
 	rm *.o

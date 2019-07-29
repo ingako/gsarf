@@ -20,7 +20,7 @@ make
 Covtype is already included under `data/covtype/`. All the other datasets need to be generated
 and binned by the following instructions:
 
-##### Synthetic Data generation
+##### Synthetic Data Preparation
 
 Generate Agrawal datasets
 ```

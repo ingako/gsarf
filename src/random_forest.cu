@@ -1,25 +1,4 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <string.h>
-#include <limits.h>
-#include <vector>
-#include <iostream>
-#include <fstream>
-#include <sstream>
-#include <math.h>
-#include <algorithm>
-#include <map>
-#include <iomanip>
-
-#include <cuda.h>
-#include <curand.h>
-#include <curand_kernel.h>
-
-#include <thrust/sort.h>
-#include <thrust/execution_policy.h>
-
-#include "common.h"
+#include "random_forest.cuh"
 
 using namespace std;
 

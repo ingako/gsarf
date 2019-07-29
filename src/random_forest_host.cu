@@ -1,25 +1,12 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <string.h>
-#include <limits.h>
-#include <vector>
-#include <iostream>
-#include <fstream>
-#include <sstream>
-#include <math.h>
-#include <algorithm>
-#include <map>
-#include <iomanip>
-
-#include <cuda.h>
-#include <curand.h>
-#include <curand_kernel.h>
-
+#include "random_forest_host.cuh"
 #include "common.h"
-#include "random_forest.cu"
 
 using namespace std;
+
+extern "C" void setup_kernel_host(curandState* d_state) {
+    setup_kernel<<<GROWING_TREE_COUNT, INSTANCE_COUNT_PER_TREE>>>(d_state);
+    gpuErrchk(cudaDeviceSynchronize());
+}
 
 extern "C" void tree_traversal_host(
         forest_t& d_forest,
