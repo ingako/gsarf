@@ -337,6 +337,8 @@ bool adapt_state(
         for (int i = 0; i < drift_tree_id_list.size(); i++) {
             if (cur_tree_pool_size >= CPU_TREE_POOL_SIZE) {
                 // TODO
+                // evict LRU tree
+                
                 cout << "reached CPU_TREE_POOL_SIZE limit!" << endl;
                 return false;
             }

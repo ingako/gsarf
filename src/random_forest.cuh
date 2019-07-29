@@ -1,5 +1,5 @@
-#ifndef __randolm_forest__
-#define __randolm_forest__
+#ifndef __random_forest__
+#define __random_forest__
 
 #include <cuda.h>
 #include <curand.h>
@@ -14,6 +14,7 @@ __device__ long get_left(int index);
 __device__ long get_right(int index);
 __device__ int get_rand(int low, int high, curandState *local_state);
 __device__ int poisson(float lambda, curandState *local_state);
+__device__ float compute_hoeffding_bound(float range, float confidence, float n);
 
 __global__ void setup_kernel(curandState *state);
 
@@ -78,9 +79,6 @@ __global__ void compute_information_gain(
         int leaf_count_per_tree,
         int class_count,
         int leaf_counter_size);
-
-__device__ float compute_hoeffding_bound(float range, float confidence, float n);
-
 
 __global__ void compute_node_split_decisions(
         float* info_gain_vals,

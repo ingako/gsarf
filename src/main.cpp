@@ -21,7 +21,7 @@
 
 #include "common.h"
 #include "random_forest_host.cuh"
-#include "state_adaptive_algorithm.cpp"
+#include "state_adaptation.cpp"
 
 using namespace std;
 
