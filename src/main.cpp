@@ -799,27 +799,26 @@ int main(int argc, char *argv[]) {
         log_file << "\nlaunching tree_traversal kernel..." << endl;
 
         tree_traversal_host(
-            d_forest,
-            h_tree_active_status,
-            d_tree_active_status,
-            h_data,
-            d_data,
-            data_len,
-            d_reached_leaf_ids,
-            d_is_leaf_active,
-            d_correct_counter,
-            d_forest_vote,
-            forest_vote_len,
-            h_forest_vote_idx_arr,
-            d_forest_vote_idx_arr,
-            d_weights,
-            d_tree_error_count,
-            d_confusion_matrix,
-            d_class_count_arr,
-            majority_class,
-            d_state,
-            class_count_arr,
-            log_file);
+                d_forest,
+                d_tree_active_status,
+                h_data,
+                d_data,
+                data_len,
+                d_reached_leaf_ids,
+                d_is_leaf_active,
+                d_correct_counter,
+                d_forest_vote,
+                forest_vote_len,
+                h_forest_vote_idx_arr,
+                d_forest_vote_idx_arr,
+                d_weights,
+                d_tree_error_count,
+                d_confusion_matrix,
+                d_class_count_arr,
+                majority_class,
+                d_state,
+                class_count_arr,
+                log_file);
 
         log_file << "tree_traversal completed" << endl;
 
