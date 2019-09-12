@@ -22,7 +22,7 @@ extern int NODE_COUNT_PER_TREE;
 extern int LEAF_COUNT_PER_TREE;
 
 extern int LEAF_COUNTER_SIZE;
-extern int LEAF_COUNTERS_SIZE_PER_TREE;
+extern long LEAF_COUNTERS_SIZE_PER_TREE;
 extern long ALL_LEAF_COUNTERS_SIZE;
 
 extern float r;
