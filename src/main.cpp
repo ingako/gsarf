@@ -800,6 +800,7 @@ int main(int argc, char *argv[]) {
 
         tree_traversal_host(
                 d_forest,
+		h_tree_active_status,
                 d_tree_active_status,
                 h_data,
                 d_data,
