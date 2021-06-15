@@ -1,6 +1,10 @@
 # GSARF: State Adaptive Random Forest on GPU
 
-Random Forests is a classical ensemble method used to improve the performance of single tree classifiers.  In evolving data streams, the classifier has also to be adaptive and work under very strict constraints of space and time. The computational load of using a large number of classifiers can make its application extremely expensive. One clear benefit of random forest is its ability to be executed in parallel. Most research concentrates on heuristics that optimize the code, fundamental approaches for fast execution of learned models based on computational architecture is rare. In our research we introduce a random forest model utilizing both GPU and CPU, called State-Adaptive Random Forest on GPU (GSARF).  We address the pre-existing challenges of adapting random forest for data streams, specifically in the area of continual learning, whereby we reuse trees in the random forest when old concepts reappear. Current random forest in data streams stores two types of trees, foreground trees which are trees that are currently used in prediction, background trees which are trees that are built when we are aware of possible changes in the data streams. Additionally, we store candidate trees, which are trees that had been highly used in the previous concepts, but are now discarded due to changes in the data stream. We store these trees in a repository as they may become relevant at some future point and can be reused. By having this repository, we can reduce computation cost. Our approach has shown to outperform a baseline GPU-based approach in terms of accuracy performance. 
+Implementation for the paper "[GPU-based State Adaptive Random Forest for Evolving Data Streams](https://ieeexplore.ieee.org/document/9207333)".
+
+The implementation includes both the GPU adaptive random forest and the GPU state adaptive random forest.
+
+> Random Forests is a classical ensemble method used to improve the performance of single tree classifiers.  In evolving data streams, the classifier has also to be adaptive and work under very strict constraints of space and time. The computational load of using a large number of classifiers can make its application extremely expensive. One clear benefit of random forest is its ability to be executed in parallel. Most research concentrates on heuristics that optimize the code, fundamental approaches for fast execution of learned models based on computational architecture is rare. In our research we introduce a random forest model utilizing both GPU and CPU, called State-Adaptive Random Forest on GPU (GSARF).  We address the pre-existing challenges of adapting random forest for data streams, specifically in the area of continual learning, whereby we reuse trees in the random forest when old concepts reappear. Current random forest in data streams stores two types of trees, foreground trees which are trees that are currently used in prediction, background trees which are trees that are built when we are aware of possible changes in the data streams. Additionally, we store candidate trees, which are trees that had been highly used in the previous concepts, but are now discarded due to changes in the data stream. We store these trees in a repository as they may become relevant at some future point and can be reused. By having this repository, we can reduce computation cost. Our approach has shown to outperform a baseline GPU-based approach in terms of accuracy performance. 
 
 
 ### Prerequisites
@@ -86,6 +90,7 @@ Draw gain chart.
 gnuplot -p draw_gain.p
 ```
 
+##### Some quick dirty evaluation scripts can be found under data/led/
 Evaluate memory consumption on host machine.
 ```
 ./mem_eval.sh
